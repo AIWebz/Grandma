@@ -56,7 +56,7 @@
     route = r;
     params = p;
     U.$$(".view").forEach((v) => (v.hidden = v.dataset.view !== r));
-    U.$("#ask-fab").hidden = !["recipes", "tasks", "grocery", "planner", "cookbook"].includes(r);
+    U.$("#topbar").classList.remove("scrolled");
     closeNav();
     if (r === "chat") {
       GA.Chat.open(p[0] || null);
@@ -189,11 +189,12 @@
     if (route === "chat") {
       const busy = GA.Chat.busy();
       const connected = GA.AI.connected();
-      const status = busy ? "Grandma is thinking…" : connected ? "Grandma is ready ❤️" : "Not connected yet";
+      const status = busy ? "Grandma is thinking…" : connected ? "Grandma is ready ❤️" : "Needs a quick setup";
       title.innerHTML = `${U.avatar(32, busy ? "thinking" : "")}<div class="t-stack"><h1>Grandma AI</h1><span class="status ${busy ? "busy" : connected ? "" : "off"}">${status}</span></div>`;
       actions.innerHTML = `<button class="icon-btn" data-action="new-chat" aria-label="New conversation" title="New conversation">${U.icon("edit")}</button>`;
     } else {
-      title.innerHTML = `<h1>${U.esc(TITLES[route])}</h1>`;
+      // Pages carry their own large heading; keep the bar quiet.
+      title.innerHTML = isDesktop() ? "" : `<h1>${U.esc(TITLES[route])}</h1>`;
       actions.innerHTML = "";
     }
   }
@@ -250,6 +251,7 @@
           finish(e.target.name.value.trim());
           close();
           GA.Chat.render();
+          if (!GA.AI.connected()) setTimeout(() => GA.Ollama.openSetup({ onDone: () => GA.App.refreshAll() }), 250);
         };
         const login = sheet.querySelector("[data-login]");
         if (login) login.onclick = () => {
@@ -383,6 +385,10 @@
         closeNav();
         return;
       }
+      if (e.target.closest("[data-ollama-setup]")) {
+        GA.Ollama.openSetup({ onDone: () => { GA.App.refreshAll(); GA.Chat.focus(); } });
+        return;
+      }
       const au = e.target.closest("[data-auth]");
       if (au) return openAuth(au.dataset.auth);
       const ra = e.target.closest("[data-recipe-action]");
@@ -433,7 +439,6 @@
     U.$("#expand-btn").onclick = () => setCollapsed(false);
     U.$(".new-chat .nc-icon").outerHTML = U.icon("plus");
     U.$(".sb-search-icon").outerHTML = U.icon("search");
-    U.$("#ask-fab").innerHTML = `${U.avatar(36)}<span>Ask Grandma</span>`;
 
     const search = U.$("#conv-search");
     search.addEventListener("input", U.debounce(() => {

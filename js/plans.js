@@ -127,11 +127,14 @@
       return b.date === U.today() ? b.count || 0 : 0;
     },
     remainingMessages() {
+      // Local AI runs on the person's own computer, so there's nothing to meter.
+      if (GA.AI && GA.AI.mode() === "ollama") return Infinity;
       return Math.max(0, Plans.limit("dailyMessages") + Plans.bonus() - Plans.usage());
     },
     recordMessage() {
-      // The proxy reports the authoritative count itself (see syncRemaining).
-      if (GA.AI && GA.AI.mode() === "proxy") return;
+      // The proxy reports the authoritative count itself (see syncRemaining),
+      // and local Ollama use isn't metered at all.
+      if (GA.AI && ["proxy", "ollama"].includes(GA.AI.mode())) return;
       const today = U.today();
       const u = Store.doc("local").usage || {};
       const count = u.date === today ? u.count + 1 : 1;

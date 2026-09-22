@@ -90,7 +90,7 @@
       },
     },
     // Never synced: device-only values.
-    local: { devKey: "", devModel: "", usage: { date: "", count: 0 }, bonus: { date: "", count: 0 }, lastInterstitial: 0, sidebarCollapsed: false, notified: {} },
+    local: { ollama: { url: "http://localhost:11434", model: "llama3.1:8b", visionModel: "", ready: false }, usage: { date: "", count: 0 }, bonus: { date: "", count: 0 }, lastInterstitial: 0, sidebarCollapsed: false, notified: {} },
     subscription: { plan: "free", status: "active", period: "", renewsAt: null, source: "" },
     household: { id: "", name: "", inviteCode: "", role: "" },
   };

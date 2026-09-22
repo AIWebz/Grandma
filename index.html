@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Grandma AI">
   <meta name="color-scheme" content="light dark">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="assets/logo/mark.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/icons/favicon-64.png" type="image/png">
   <link rel="icon" href="assets/icons/icon-192.png" type="image/png" sizes="192x192">
   <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
@@ -30,7 +30,7 @@
     <aside id="sidebar" class="sidebar" aria-label="Navigation">
       <div class="sb-top">
         <a class="brand" href="#/chat" data-route="chat" aria-label="Grandma AI home">
-          <img src="assets/logo/mark.svg" alt="" width="28" height="28">
+          <img src="assets/logo/avatar.png" alt="" width="30" height="30">
           <span>Grandma AI</span>
         </a>
         <button class="icon-btn sb-collapse" id="sb-collapse" aria-label="Collapse sidebar" title="Collapse sidebar"></button>
@@ -81,7 +81,7 @@
             </div>
             <input type="file" id="attach-input" accept="image/*" multiple hidden>
           </form>
-          <p class="composer-note">Grandma is an AI and can make mistakes. Please double-check anything important.</p>
+          <p class="composer-note">Grandma is an AI and can make mistakes.</p>
         </div>
       </section>
 
@@ -94,7 +94,6 @@
       <section class="view page" id="view-profile" data-view="profile" hidden></section>
       <section class="view page" id="view-pricing" data-view="pricing" hidden></section>
 
-      <button class="ask-fab" id="ask-fab" data-route="chat" hidden aria-label="Talk to Grandma"></button>
     </main>
   </div>
 
@@ -111,6 +110,7 @@
   <script src="js/account.js" defer></script>
   <script src="data/recipes.js" defer></script>
   <script src="js/ai.js" defer></script>
+  <script src="js/ollama.js" defer></script>
   <script src="js/actions.js" defer></script>
   <script src="js/voice.js" defer></script>
   <script src="js/ads.js" defer></script>

@@ -253,21 +253,9 @@
   U.icon = (name, cls = "") =>
     `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ""}</svg>`;
 
-  /* The Grandma avatar: same mark as the logo, with eyes that blink. */
-  U.avatar = (size = 32, extra = "") => `
-    <span class="avatar ${extra}" style="width:${size}px;height:${size}px" aria-hidden="true">
-      <svg viewBox="0 0 64 64">
-        <rect width="64" height="64" rx="18" fill="var(--accent)"/>
-        <circle cx="32" cy="16.5" r="6.5" fill="#FBF3EA"/>
-        <circle cx="32" cy="36" r="16" fill="#FBF3EA"/>
-        <path d="M16.6 32.5c1.6-7.6 8.2-12.5 15.4-12.5s13.8 4.9 15.4 12.5c-4.2-3.4-9.4-5.1-15.4-5.1s-11.2 1.7-15.4 5.1z" fill="#F1DDCB"/>
-        <g class="eyes" fill="#5A3E33"><ellipse cx="25.8" cy="36.8" rx="1.5" ry="1.7"/><ellipse cx="38.2" cy="36.8" rx="1.5" ry="1.7"/></g>
-        <g fill="none" stroke="#5A3E33" stroke-width="2.2" stroke-linecap="round">
-          <circle cx="25.8" cy="36.5" r="4.6"/><circle cx="38.2" cy="36.5" r="4.6"/>
-          <path d="M30.4 36.2q1.6-1.2 3.2 0"/><path d="M24 45.2q8 5.6 16 0"/>
-        </g>
-      </svg>
-    </span>`;
+  /* The Grandma avatar (assets/logo/avatar.png), always shown as a circle. */
+  U.avatar = (size = 32, extra = "") =>
+    `<span class="avatar ${extra}" style="width:${size}px;height:${size}px" aria-hidden="true"><img src="assets/logo/avatar.png" alt="" width="${size}" height="${size}" decoding="async"></span>`;
 
   /* ---------- modal / sheet ---------- */
   U.openSheet = ({ title, body, onMount, wide = false }) => {

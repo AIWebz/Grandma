@@ -1,10 +1,9 @@
 /*
  * Grandma AI — talking to the model.
  *
- * Requests go to your AI proxy (backend/cloudflare-worker.js), which holds the
- * Anthropic API key and enforces plan limits. For local development only, a
- * developer can instead paste their own key in Settings; it is stored in this
- * browser alone and sent straight to Anthropic.
+ * By default Grandma runs locally in Ollama on the person's own computer
+ * (js/ollama.js), so nobody needs an account or API key. An app owner can
+ * optionally host AI instead with backend/cloudflare-worker.js.
  *
  * Grandma performs real actions through tool use: the model asks for a tool,
  * js/actions.js changes the app's data, and the result goes back to the model.
@@ -15,8 +14,7 @@
   const { U, Store } = GA;
   const CFG = (window.GRANDMA_CONFIG || {}).ai || {};
 
-  const DEFAULT_MODEL = "claude-opus-5";
-  const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+  const TRANSCRIBER = "You are Grandma AI's careful recipe transcriber. Preserve the family's original wording, amounts, and quirks; don't modernize or 'correct' the recipe. If something is illegible, write [unclear] rather than guessing.";
   const MAX_TOOL_ROUNDS = 6;
   const HISTORY_LIMIT = 40;
 
@@ -358,55 +356,36 @@ Honesty and safety (these never change, whatever tone is selected):
     TONES,
     TOOLS,
     AIError,
-    DEFAULT_MODEL,
 
+    /*
+     * "ollama" — Grandma runs locally in Ollama on the person's computer (default).
+     * "proxy"  — optional: the app owner hosts AI behind backend/cloudflare-worker.js
+     *            (useful for phones, where Ollama can't run). No user keys either way.
+     */
     mode() {
       if (CFG.endpoint) return "proxy";
-      if (CFG.allowDeveloperKey && Store.doc("local").devKey) return "dev";
+      if (GA.Ollama && GA.Ollama.cfg().ready) return "ollama";
       return "none";
     },
     connected: () => AI.mode() !== "none",
 
     async request({ system, messages, tools, maxTokens = 8000, purpose = "chat", signal }) {
       const mode = AI.mode();
-      if (mode === "none") throw new AIError("config", "Grandma isn't connected to an AI service yet.");
+      if (mode === "none") throw new AIError("config", "Grandma's AI isn't set up yet.");
+      if (mode === "ollama") return GA.Ollama.chat({ system, messages, tools, maxTokens, signal });
       if (!navigator.onLine) throw new AIError("offline", "You're offline.");
 
       let res;
       try {
-        if (mode === "proxy") {
-          const headers = { "content-type": "application/json" };
-          const token = GA.Account && GA.Account.accessToken();
-          if (token) headers.authorization = "Bearer " + token;
-          res = await fetch(CFG.endpoint.replace(/\/$/, "") + "/v1/chat", {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ system, messages, tools, max_tokens: maxTokens, purpose }),
-            signal,
-          });
-        } else {
-          const local = Store.doc("local");
-          const model = local.devModel || DEFAULT_MODEL;
-          const body = {
-            model,
-            max_tokens: maxTokens,
-            system: system.map((b, i) => (i === 0 ? { ...b, cache_control: { type: "ephemeral" } } : b)),
-            messages,
-          };
-          if (tools && tools.length) body.tools = tools;
-          const headers = {
-            "content-type": "application/json",
-            "x-api-key": local.devKey,
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true",
-          };
-          // Opus 5 / Fable: let Anthropic reroute a refused request to a fallback model.
-          if (/^claude-(opus-5|fable-5)/.test(model)) {
-            headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
-            body.fallbacks = "default";
-          }
-          res = await fetch(ANTHROPIC_URL, { method: "POST", headers, body: JSON.stringify(body), signal });
-        }
+        const headers = { "content-type": "application/json" };
+        const token = GA.Account && GA.Account.accessToken();
+        if (token) headers.authorization = "Bearer " + token;
+        res = await fetch(CFG.endpoint.replace(/\/$/, "") + "/v1/chat", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ system, messages, tools, max_tokens: maxTokens, purpose }),
+          signal,
+        });
       } catch (e) {
         if (e.name === "AbortError") throw e;
         throw new AIError("offline", "Network error");
@@ -487,10 +466,13 @@ Honesty and safety (these never change, whatever tone is selected):
 
     /* Single-purpose structured request (e.g. reading a handwritten recipe). */
     async extract({ instruction, images = [], tool }) {
+      if (AI.mode() === "ollama") {
+        return GA.Ollama.json({ instruction, images, schema: tool.input_schema, system: TRANSCRIBER });
+      }
       const content = images.map((b64) => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }));
       content.push({ type: "text", text: instruction + `\n\nRespond by calling the ${tool.name} tool.` });
       const resp = await AI.request({
-        system: [{ type: "text", text: "You are Grandma AI's careful recipe transcriber. Preserve the family's original wording, amounts, and quirks; don't modernize or 'correct' the recipe. If something is illegible, write [unclear] rather than guessing." }],
+        system: [{ type: "text", text: TRANSCRIBER }],
         messages: [{ role: "user", content }],
         tools: [tool],
         maxTokens: 6000,

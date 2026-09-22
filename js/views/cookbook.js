@@ -223,7 +223,11 @@
     const status = sheet.querySelector("[data-ai-status]");
     const btn = sheet.querySelector("[data-read]");
     if (!GA.AI.connected()) {
-      status.textContent = "Grandma needs an AI connection to read handwriting. You can still type it in.";
+      status.innerHTML = `Grandma's AI isn't set up yet. <button type="button" class="link-btn" data-ollama-setup>Set it up</button>, or type the recipe in.`;
+      return;
+    }
+    if (GA.AI.mode() === "ollama" && !GA.Ollama.cfg().visionModel) {
+      status.innerHTML = `To read photos, Grandma needs her photo model. <button type="button" class="link-btn" data-ollama-setup>Add it in setup</button>, or type the recipe in.`;
       return;
     }
     if (GA.Plans.remainingMessages() <= 0) {

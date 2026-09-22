@@ -20,7 +20,6 @@
     const p = Store.doc("profile");
     const s = Store.doc("settings");
     const plan = GA.Plans.current();
-    const local = Store.doc("local");
     const signedIn = GA.Account.signedIn();
     const mem = Store.list("memory");
     const memLimit = GA.Plans.limit("memory");
@@ -29,6 +28,7 @@
     const notif = s.notifications;
     const perm = GA.Notify.permission();
     const aiMode = GA.AI.mode();
+    const ollama = GA.Ollama.cfg();
 
     return `
       <div class="page-inner">
@@ -43,6 +43,18 @@
             : GA.Account.configured()
               ? `<div class="set-row"><div class="l"><b>Not signed in</b><small>Sign in to keep everything in sync across devices.</small></div><button class="btn small primary" data-auth="login">Sign in</button></div>`
               : `<div class="set-row"><div class="l"><b>This device only</b><small>Your data is stored privately on this device. Accounts and sync appear once the app's owner connects a database.</small></div></div>`}
+        </div>
+
+        <div class="section-title" id="set-ai">Grandma's AI</div>
+        <div class="settings-group">
+          ${aiMode === "proxy"
+            ? `<div class="set-row"><div class="l"><b>Status</b><small>Connected through this app's server.</small></div><span class="v">🟢 On</span></div>`
+            : `<div class="set-row"><div class="l"><b>Ollama on this computer</b><small data-ollama-status>${aiMode === "ollama" ? "Checking…" : "Not set up yet — free, private, no API key."}</small></div>
+                 <button class="btn small ${aiMode === "ollama" ? "" : "primary"}" data-ollama-setup>${aiMode === "ollama" ? "Run setup again" : "Set up Grandma"}</button></div>
+               ${aiMode === "ollama" ? `
+               <div class="set-row"><div class="l"><b>Chat model</b><small>What Grandma thinks with</small></div><select class="select" data-ollama-model><option>${U.esc(ollama.model)}</option></select></div>
+               <div class="set-row"><div class="l"><b>Photo model</b><small>Reads recipe cards and photos</small></div><select class="select" data-ollama-vision><option value="${U.esc(ollama.visionModel)}">${U.esc(ollama.visionModel || "Off")}</option></select></div>
+               <div class="set-row"><div class="l"><b>Ollama address</b><small>Only change this if you know you need to</small></div><input class="input" data-ollama-url value="${U.esc(ollama.url)}" spellcheck="false" style="max-width:220px"></div>` : ""}`}
         </div>
 
         <div class="section-title" id="set-grandma">Grandma</div>
@@ -107,19 +119,6 @@
                    <div class="set-row"><div class="l"><b>Join a household</b><small>Enter the invite code from a family member</small></div><button class="btn small" data-hh-join>Join</button></div>`}
         </div>
 
-        <div class="section-title" id="set-ai">AI connection</div>
-        <div class="settings-group">
-          <div class="set-row"><div class="l"><b>Status</b><small>${aiMode === "proxy" ? "Connected through this app's secure server." : aiMode === "dev" ? "Developer mode: using your own API key from this browser." : "Not connected yet."}</small></div><span class="v">${aiMode === "none" ? "⚪ Off" : "🟢 On"}</span></div>
-          ${!CFG.ai || !CFG.ai.endpoint ? (CFG.ai && CFG.ai.allowDeveloperKey
-            ? `<div class="set-row" style="display:block">
-                 <p class="muted" style="font-size:14px;margin-bottom:10px"><b>For developers testing locally.</b> Paste an Anthropic API key to try Grandma before deploying the secure proxy. The key is stored only in this browser and sent directly to Anthropic. Never use this on a shared or public computer, and never ship a build with a key in it. For real users, deploy <code>backend/cloudflare-worker.js</code> and set <code>ai.endpoint</code> in <code>config.js</code>.</p>
-                 <label class="field"><span>Anthropic API key</span><input class="input" type="password" data-devkey value="${U.esc(local.devKey)}" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
-                 <label class="field"><span>Model</span><input class="input" data-devmodel value="${U.esc(local.devModel)}" placeholder="${GA.AI.DEFAULT_MODEL}" spellcheck="false"></label>
-                 <div class="row"><button class="btn small primary" data-devkey-save>Save</button>${local.devKey ? `<button class="btn small ghost" data-devkey-clear>Remove key</button>` : ""}</div>
-               </div>`
-            : `<div class="set-row"><div class="l"><small>The app's owner needs to deploy the AI proxy and add its URL to config.js.</small></div></div>`) : ""}
-        </div>
-
         <div class="section-title" id="set-privacy">Privacy & data</div>
         <div class="settings-group">
           <button class="set-row link" data-goto="set-memory"><div class="l"><b>Memory controls</b><small>See, edit, or delete what Grandma remembers</small></div>${U.icon("chevronRight")}</button>
@@ -175,18 +174,6 @@
       if (e.target.closest("[data-mem-add]")) return memoryForm(null);
       if (e.target.closest("[data-mem-clear]") && (await U.confirm("Forget everything Grandma remembers about you?", { okLabel: "Forget everything" }))) {
         Store.list("memory").forEach((m) => Store.remove("memory", m.id));
-        return;
-      }
-
-      if (e.target.closest("[data-devkey-save]")) {
-        Store.setDoc("local", { devKey: U.$("[data-devkey]", root).value.trim(), devModel: U.$("[data-devmodel]", root).value.trim() });
-        U.toast(Store.doc("local").devKey ? "Saved. Say hi to Grandma!" : "Key removed");
-        GA.App.refreshAll();
-        return;
-      }
-      if (e.target.closest("[data-devkey-clear]")) {
-        Store.setDoc("local", { devKey: "" });
-        GA.App.refreshAll();
         return;
       }
 
@@ -255,9 +242,29 @@
       if (vs) return setPath("voice.voiceURI", vs.value);
       const vr = e.target.closest("[data-voice-rate]");
       if (vr) return setPath("voice.rate", Number(vr.value));
+      const om = e.target.closest("[data-ollama-model]");
+      if (om) return GA.Ollama.save({ model: om.value });
+      const ov = e.target.closest("[data-ollama-vision]");
+      if (ov) return GA.Ollama.save({ visionModel: ov.value });
+      const ou = e.target.closest("[data-ollama-url]");
+      if (ou) return GA.Ollama.save({ url: ou.value.trim() || GA.Ollama.DEFAULT_URL });
       const pn = e.target.closest("[data-profile]");
       if (pn) Store.setDoc("profile", { [pn.dataset.profile]: pn.value.trim() });
     };
+  }
+
+  /* Show Ollama's live status and the models actually installed. */
+  async function fillOllama(root) {
+    const st = U.$("[data-ollama-status]", root);
+    if (!st || GA.AI.mode() !== "ollama") return;
+    const [s, models] = await Promise.all([GA.Ollama.status(), GA.Ollama.installed()]);
+    st.textContent = s.state === "ok" ? `🟢 Running${s.version ? " · Ollama " + s.version : ""}` : s.state === "blocked" ? "🟠 Running, but needs permission for this website — run setup again" : "⚪ Not running — open the Ollama app";
+    const c = GA.Ollama.cfg();
+    const opts = (list, cur, off) => (off ? `<option value="">Off</option>` : "") + [...new Set(list.concat(cur ? [cur] : []))].map((m) => `<option ${m === cur ? "selected" : ""}>${U.esc(m)}</option>`).join("");
+    const sm = U.$("[data-ollama-model]", root);
+    const sv = U.$("[data-ollama-vision]", root);
+    if (sm && models.length) sm.innerHTML = opts(models, c.model, false);
+    if (sv && models.length) sv.innerHTML = opts(models, c.visionModel, true);
   }
 
   function memoryForm(m) {
@@ -441,6 +448,7 @@
     render(root, params) {
       root.innerHTML = settingsHTML();
       wireSettings(root);
+      fillOllama(root);
       const section = params[0];
       if (section) {
         const el = document.getElementById("set-" + section);
@@ -453,6 +461,7 @@
       const y = root.scrollTop;
       root.innerHTML = settingsHTML();
       root.scrollTop = y;
+      fillOllama(root);
     },
   };
   GA.Views.profile = {

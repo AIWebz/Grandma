@@ -7,19 +7,17 @@
  * (backend/cloudflare-worker.js) as encrypted environment variables.
  *
  * Every section is optional. With nothing filled in, the app still runs:
- * data stays on this device, and Grandma asks you to connect an AI service.
+ * data stays on this device, and Grandma helps each person set up Ollama.
  * See README.md for step-by-step setup of each section.
  */
 window.GRANDMA_CONFIG = {
   ai: {
-    // URL of your deployed AI proxy, e.g. "https://grandma-ai.<you>.workers.dev".
-    // The proxy holds the Anthropic API key; the browser never sees it.
+    // Grandma's AI runs on each person's own computer with Ollama (free, no
+    // API key). The app walks people through installing it — nothing to set.
+    //
+    // Optional: to also offer AI on phones (where Ollama can't run), deploy
+    // backend/cloudflare-worker.js and put its URL here. Leave "" to use Ollama.
     endpoint: "",
-
-    // Lets a developer paste their own Anthropic API key under
-    // Settings → AI connection, stored only in that browser. Handy for local
-    // testing before the proxy exists. Set to false for production builds.
-    allowDeveloperKey: true,
   },
 
   // Supabase powers accounts (email + Google) and cloud sync.

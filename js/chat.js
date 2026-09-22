@@ -143,7 +143,7 @@
         <p class="hello">${U.esc(U.greetingWord())}${name ? ", " + U.esc(name) : ""} ❤️</p>
         <h2>What can Grandma help you with?</h2>
         <p class="sub">Recipes, chores, planning, groceries, or just a little help getting through the day.</p>
-        <p class="grandma-line">“${U.esc(grandmaLine())}”</p>
+        <p class="grandma-line">${U.esc(grandmaLine())}</p>
         ${total ? `<a class="progress-pill" href="#/tasks" data-route="tasks"><span class="ring" style="--p:${pct}"></span><span>Today's Progress · <b>${done} / ${total}</b> tasks completed</span></a>` : ""}
         <div class="prompt-grid">
           ${PROMPTS.map(([e, t]) => `<button class="prompt-card" data-prompt="${U.esc(t)}"><span class="emo">${e}</span><span>${U.esc(t)}</span></button>`).join("")}
@@ -157,7 +157,7 @@
       return `<div class="msg user"><div class="bubble">${imgs}${U.esc(m.text || "")}</div></div>`;
     }
     if (m.role === "error") {
-      return `<div class="msg error">${U.avatar(30)}<div class="body"><p>${U.esc(m.text)}</p><div class="row"><button class="btn small primary" data-retry="${i}">${U.icon("refresh")}Try again</button></div></div></div>`;
+      return `<div class="msg error">${U.avatar(30)}<div class="body"><p>${U.esc(m.text)}</p><div class="row"><button class="btn small primary" data-retry="${i}">${U.icon("refresh")}Try again</button>${m.setup ? `<button class="btn small ghost" data-ollama-setup>Open setup</button>` : ""}</div></div></div>`;
     }
     return `<div class="msg grandma">${U.avatar(30)}<div class="body">
         ${m.text ? `<div class="content">${U.md(m.text)}</div>` : ""}
@@ -173,9 +173,9 @@
     if (!ephemeral) return "";
     if (ephemeral.kind === "connect") {
       return `<div class="msg notice">${U.avatar(30)}<div class="body">
-          <p><strong>Grandma isn't connected to her AI yet.</strong></p>
-          <p class="muted">Whoever runs this app needs to connect an AI service before Grandma can chat. Everything else — recipes, tasks, groceries, and the planner — works right now.</p>
-          <div class="row"><button class="btn small primary" data-route="settings" data-section="ai">Set up AI connection</button><button class="btn small ghost" data-route="recipes">Browse recipes</button></div>
+          <p><strong>Let's get Grandma set up first.</strong></p>
+          <p class="muted">Grandma's AI runs free and private on your computer with Ollama. Setup takes a few minutes, and I'll walk you through it. Recipes, tasks, groceries, and the planner already work.</p>
+          <div class="row"><button class="btn small primary" data-ollama-setup>Set up Grandma</button><button class="btn small ghost" data-route="recipes">Browse recipes</button></div>
         </div></div>`;
     }
     if (ephemeral.kind === "limit") {
@@ -345,7 +345,12 @@
         if (e.cards && e.cards.length) messages.push({ role: "grandma", text: "", cards: e.cards, ts: Date.now() });
         messages.push({
           role: "error",
-          text: e.kind === "offline" ? "Looks like you're offline. I'll be right here when you're back." : "Grandma's having trouble connecting right now. Give it another try in a moment.",
+          text:
+            e.kind === "offline" ? "Looks like you're offline. I'll be right here when you're back."
+            : e.kind === "ollama-offline" ? "I can't reach Ollama on this computer. Make sure the Ollama app is open, then try again."
+            : e.kind === "ollama-model" ? "My AI model isn't downloaded on this computer yet. Let's finish setup."
+            : "Grandma's having trouble connecting right now. Give it another try in a moment.",
+          setup: /^ollama/.test(e.kind || ""),
           retry: { text, images: imageIds },
           ts: Date.now(),
         });
