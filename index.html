@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Grandma AI</title>
+  <meta name="description" content="Grandma AI — a warm, practical AI assistant for recipes, chores, planning, groceries, and a little encouragement. Grandma helps you take care of life.">
+  <meta name="theme-color" content="#FBF7F2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1C1816" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Grandma AI">
+  <meta name="color-scheme" content="light dark">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/logo/mark.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      var t = localStorage.getItem("grandma-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="app" class="app" data-loading="true">
+    <aside id="sidebar" class="sidebar" aria-label="Navigation">
+      <div class="sb-top">
+        <a class="brand" href="#/chat" data-route="chat" aria-label="Grandma AI home">
+          <img src="assets/logo/mark.svg" alt="" width="28" height="28">
+          <span>Grandma AI</span>
+        </a>
+        <button class="icon-btn sb-collapse" id="sb-collapse" aria-label="Collapse sidebar" title="Collapse sidebar"></button>
+      </div>
+
+      <button class="new-chat" data-action="new-chat"><span class="nc-icon"></span>New Conversation</button>
+
+      <div class="sb-scroll">
+        <div class="sb-search">
+          <span class="sb-search-icon"></span>
+          <input id="conv-search" type="search" placeholder="Search conversations" aria-label="Search conversations" autocomplete="off">
+        </div>
+        <div class="sb-label">Recent Conversations</div>
+        <nav id="conv-list" class="conv-list" aria-label="Recent conversations"></nav>
+
+        <div class="sb-label">Grandma</div>
+        <nav class="sb-nav" id="sb-nav" aria-label="Sections"></nav>
+      </div>
+
+      <div class="sb-bottom" id="sb-bottom"></div>
+    </aside>
+    <div class="scrim" id="scrim" aria-hidden="true"></div>
+
+    <main class="main" id="main">
+      <header class="topbar" id="topbar">
+        <button class="icon-btn menu-btn" id="menu-btn" aria-label="Open menu"></button>
+        <button class="icon-btn expand-btn" id="expand-btn" aria-label="Expand sidebar" title="Expand sidebar"></button>
+        <div class="topbar-title" id="topbar-title"></div>
+        <div class="topbar-actions" id="topbar-actions"></div>
+      </header>
+
+      <div id="connection-banner" class="banner" hidden></div>
+
+      <section class="view chat-view" id="view-chat" data-view="chat">
+        <div class="chat-scroll" id="chat-scroll">
+          <div class="chat-inner" id="chat-thread" aria-live="polite"></div>
+        </div>
+        <div class="composer-wrap">
+          <form class="composer" id="composer" autocomplete="off">
+            <div class="attach-preview" id="attach-preview" hidden></div>
+            <label class="sr-only" for="composer-input">Message Grandma</label>
+            <textarea id="composer-input" rows="1" placeholder="Message Grandma..." enterkeyhint="send"></textarea>
+            <div class="composer-row">
+              <button type="button" class="icon-btn" id="attach-btn" aria-label="Attach a photo" title="Attach a photo"></button>
+              <button type="button" class="icon-btn" id="mic-btn" aria-label="Speak to Grandma" title="Speak to Grandma"></button>
+              <span class="composer-hint" id="composer-hint"></span>
+              <button type="submit" class="send-btn" id="send-btn" aria-label="Send message" disabled></button>
+            </div>
+            <input type="file" id="attach-input" accept="image/*" multiple hidden>
+          </form>
+          <p class="composer-note">Grandma is an AI and can make mistakes. Please double-check anything important.</p>
+        </div>
+      </section>
+
+      <section class="view page" id="view-recipes" data-view="recipes" hidden></section>
+      <section class="view page" id="view-tasks" data-view="tasks" hidden></section>
+      <section class="view page" id="view-grocery" data-view="grocery" hidden></section>
+      <section class="view page" id="view-planner" data-view="planner" hidden></section>
+      <section class="view page" id="view-cookbook" data-view="cookbook" hidden></section>
+      <section class="view page" id="view-settings" data-view="settings" hidden></section>
+      <section class="view page" id="view-profile" data-view="profile" hidden></section>
+      <section class="view page" id="view-pricing" data-view="pricing" hidden></section>
+
+      <button class="ask-fab" id="ask-fab" data-route="chat" hidden aria-label="Talk to Grandma"></button>
+    </main>
+  </div>
+
+  <div id="cook-host"></div>
+  <div id="sheet-host"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <noscript><p style="padding:24px;font-family:sans-serif">Grandma AI needs JavaScript turned on.</p></noscript>
+
+  <script src="config.js" defer></script>
+  <script src="js/util.js" defer></script>
+  <script src="js/store.js" defer></script>
+  <script src="js/plans.js" defer></script>
+  <script src="js/account.js" defer></script>
+  <script src="data/recipes.js" defer></script>
+  <script src="js/ai.js" defer></script>
+  <script src="js/actions.js" defer></script>
+  <script src="js/voice.js" defer></script>
+  <script src="js/ads.js" defer></script>
+  <script src="js/notify.js" defer></script>
+  <script src="js/recipe-ui.js" defer></script>
+  <script src="js/chat.js" defer></script>
+  <script src="js/views/recipes.js" defer></script>
+  <script src="js/views/tasks.js" defer></script>
+  <script src="js/views/grocery.js" defer></script>
+  <script src="js/views/planner.js" defer></script>
+  <script src="js/views/cookbook.js" defer></script>
+  <script src="js/views/settings.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

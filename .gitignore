@@ -1,13 +1,31 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+
+# Secrets never belong in this repo (they live in Cloudflare / Supabase / the stores)
+.env
+.env.*
+*.keystore
+*.jks
+*.p12
+*.p8
+*.mobileprovision
+signing-key-info.txt
+
+# Native wrapper build output (if you keep a wrapper project here)
+native/**/build/
+native/**/.gradle/
+native/**/DerivedData/
+
+# Legacy Node/Expo version (server/, mobile/) — not used by the static app
 node_modules/
 dist/
-.env
-*.db
-*.db-journal
-uploads/
 .expo/
 .expo-shared/
 web-build/
-*.log
-.DS_Store
+*.db
+*.db-journal
+uploads/
 ios/
 android/
