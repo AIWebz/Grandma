@@ -7,7 +7,7 @@
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#FFFFFF",
+  "background_color": "#2B2B2B",
   "theme_color": "#FBF7F2",
   "categories": ["lifestyle", "food", "productivity"],
   "icons": [

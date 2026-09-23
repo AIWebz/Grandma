@@ -1,9 +1,9 @@
 /*
  * Grandma AI — talking to the model.
  *
- * By default Grandma runs locally in Ollama on the person's own computer
- * (js/ollama.js), so nobody needs an account or API key. An app owner can
- * optionally host AI instead with backend/cloudflare-worker.js.
+ * By default Grandma's AI runs entirely inside the web page (js/brain.js,
+ * WebLLM on WebGPU), so nobody installs anything or needs an API key. An app
+ * owner can optionally host AI instead with backend/cloudflare-worker.js.
  *
  * Grandma performs real actions through tool use: the model asks for a tool,
  * js/actions.js changes the app's data, and the result goes back to the model.
@@ -358,13 +358,13 @@ Honesty and safety (these never change, whatever tone is selected):
     AIError,
 
     /*
-     * "ollama" — Grandma runs locally in Ollama on the person's computer (default).
+     * "local"  — Grandma's brain runs inside this browser (default).
      * "proxy"  — optional: the app owner hosts AI behind backend/cloudflare-worker.js
-     *            (useful for phones, where Ollama can't run). No user keys either way.
+     *            (for browsers without WebGPU). No user keys either way.
      */
     mode() {
       if (CFG.endpoint) return "proxy";
-      if (GA.Ollama && GA.Ollama.cfg().ready) return "ollama";
+      if (GA.Brain && GA.Brain.cfg().ready) return "local";
       return "none";
     },
     connected: () => AI.mode() !== "none",
@@ -372,7 +372,7 @@ Honesty and safety (these never change, whatever tone is selected):
     async request({ system, messages, tools, maxTokens = 8000, purpose = "chat", signal }) {
       const mode = AI.mode();
       if (mode === "none") throw new AIError("config", "Grandma's AI isn't set up yet.");
-      if (mode === "ollama") return GA.Ollama.chat({ system, messages, tools, maxTokens, signal });
+      if (mode === "local") return GA.Brain.chat({ system, messages, tools, maxTokens, signal });
       if (!navigator.onLine) throw new AIError("offline", "You're offline.");
 
       let res;
@@ -466,8 +466,8 @@ Honesty and safety (these never change, whatever tone is selected):
 
     /* Single-purpose structured request (e.g. reading a handwritten recipe). */
     async extract({ instruction, images = [], tool }) {
-      if (AI.mode() === "ollama") {
-        return GA.Ollama.json({ instruction, images, schema: tool.input_schema, system: TRANSCRIBER });
+      if (AI.mode() === "local") {
+        return GA.Brain.json({ instruction, images, schema: tool.input_schema, system: TRANSCRIBER });
       }
       const content = images.map((b64) => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } }));
       content.push({ type: "text", text: instruction + `\n\nRespond by calling the ${tool.name} tool.` });

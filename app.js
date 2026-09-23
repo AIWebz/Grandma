@@ -189,8 +189,10 @@
     if (route === "chat") {
       const busy = GA.Chat.busy();
       const connected = GA.AI.connected();
-      const status = busy ? "Grandma is thinking…" : connected ? "Grandma is ready ❤️" : "Needs a quick setup";
-      title.innerHTML = `${U.avatar(32, busy ? "thinking" : "")}<div class="t-stack"><h1>Grandma AI</h1><span class="status ${busy ? "busy" : connected ? "" : "off"}">${status}</span></div>`;
+      const brain = GA.AI.mode() === "local" ? GA.Brain.status() : null;
+      const waking = brain && brain.state === "loading";
+      const status = waking ? `Waking Grandma up… ${Math.round(brain.progress * 100)}%` : busy ? "Grandma is thinking…" : connected ? "Grandma is ready ❤️" : "Tap to turn Grandma on";
+      title.innerHTML = `${U.avatar(32, busy ? "thinking" : "")}<div class="t-stack"><h1>Grandma AI</h1><span class="status ${busy || waking ? "busy" : connected ? "" : "off"}" ${connected ? "" : "data-brain-setup role=\"button\" tabindex=\"0\" style=\"cursor:pointer\""}>${status}</span></div>`;
       actions.innerHTML = `<button class="icon-btn" data-action="new-chat" aria-label="New conversation" title="New conversation">${U.icon("edit")}</button>`;
     } else {
       // Pages carry their own large heading; keep the bar quiet.
@@ -251,7 +253,7 @@
           finish(e.target.name.value.trim());
           close();
           GA.Chat.render();
-          if (!GA.AI.connected()) setTimeout(() => GA.Ollama.openSetup({ onDone: () => GA.App.refreshAll() }), 250);
+          if (!GA.AI.connected()) setTimeout(() => GA.Brain.openSetup({ onDone: () => GA.App.refreshAll() }), 250);
         };
         const login = sheet.querySelector("[data-login]");
         if (login) login.onclick = () => {
@@ -385,8 +387,8 @@
         closeNav();
         return;
       }
-      if (e.target.closest("[data-ollama-setup]")) {
-        GA.Ollama.openSetup({ onDone: () => { GA.App.refreshAll(); GA.Chat.focus(); } });
+      if (e.target.closest("[data-brain-setup]")) {
+        GA.Brain.openSetup({ onDone: () => { GA.App.refreshAll(); GA.Chat.focus(); } });
         return;
       }
       const au = e.target.closest("[data-auth]");
@@ -514,6 +516,12 @@
     onHash();
     U.$("#app").dataset.loading = "false";
     GA.Notify.start();
+    GA.Brain.onStatus(U.debounce(() => {
+      updateTopbar();
+      if (route === "settings") scheduleRefresh("local");
+    }, 150));
+    // Load Grandma's brain from the browser cache in the background.
+    setTimeout(() => GA.AI.mode() === "local" && GA.Brain.preload(), 1500);
     if (!Store.doc("profile").onboarded) setTimeout(onboarding, 250);
     handleCheckoutReturn();
   }

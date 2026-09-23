@@ -28,7 +28,7 @@
     const notif = s.notifications;
     const perm = GA.Notify.permission();
     const aiMode = GA.AI.mode();
-    const ollama = GA.Ollama.cfg();
+    const brain = GA.Brain.cfg();
 
     return `
       <div class="page-inner">
@@ -49,12 +49,10 @@
         <div class="settings-group">
           ${aiMode === "proxy"
             ? `<div class="set-row"><div class="l"><b>Status</b><small>Connected through this app's server.</small></div><span class="v">🟢 On</span></div>`
-            : `<div class="set-row"><div class="l"><b>Ollama on this computer</b><small data-ollama-status>${aiMode === "ollama" ? "Checking…" : "Not set up yet — free, private, no API key."}</small></div>
-                 <button class="btn small ${aiMode === "ollama" ? "" : "primary"}" data-ollama-setup>${aiMode === "ollama" ? "Run setup again" : "Set up Grandma"}</button></div>
-               ${aiMode === "ollama" ? `
-               <div class="set-row"><div class="l"><b>Chat model</b><small>What Grandma thinks with</small></div><select class="select" data-ollama-model><option>${U.esc(ollama.model)}</option></select></div>
-               <div class="set-row"><div class="l"><b>Photo model</b><small>Reads recipe cards and photos</small></div><select class="select" data-ollama-vision><option value="${U.esc(ollama.visionModel)}">${U.esc(ollama.visionModel || "Off")}</option></select></div>
-               <div class="set-row"><div class="l"><b>Ollama address</b><small>Only change this if you know you need to</small></div><input class="input" data-ollama-url value="${U.esc(ollama.url)}" spellcheck="false" style="max-width:220px"></div>` : ""}`}
+            : `<div class="set-row"><div class="l"><b>Runs in this browser</b><small data-brain-status>${aiMode === "local" ? "Checking…" : "Off — free, private, nothing to install."}</small></div>
+                 <button class="btn small ${aiMode === "local" ? "" : "primary"}" data-brain-setup>${aiMode === "local" ? "Change" : "Turn on Grandma"}</button></div>
+               ${aiMode === "local" ? `<div class="set-row"><div class="l"><b>Brain size</b><small>${U.esc((GA.Brain.MODELS.find((m) => m.key === brain.model) || GA.Brain.MODELS[0]).label)} · ${U.esc((GA.Brain.MODELS.find((m) => m.key === brain.model) || GA.Brain.MODELS[0]).size)} on this device</small></div>
+                 <button class="btn small ghost" data-brain-forget>Remove download</button></div>` : ""}`}
         </div>
 
         <div class="section-title" id="set-grandma">Grandma</div>
@@ -177,6 +175,11 @@
         return;
       }
 
+      if (e.target.closest("[data-brain-forget]") && (await U.confirm("Remove Grandma's brain from this device? You can download it again anytime.", { okLabel: "Remove" }))) {
+        await GA.Brain.forget();
+        GA.App.refreshAll();
+        return;
+      }
       if (e.target.closest("[data-hh-create]")) return householdCreate();
       if (e.target.closest("[data-hh-join]")) return householdJoin();
       if (e.target.closest("[data-hh-leave]") && (await U.confirm("Leave this household? Shared lists will stay with the household.", { okLabel: "Leave" }))) {
@@ -242,29 +245,17 @@
       if (vs) return setPath("voice.voiceURI", vs.value);
       const vr = e.target.closest("[data-voice-rate]");
       if (vr) return setPath("voice.rate", Number(vr.value));
-      const om = e.target.closest("[data-ollama-model]");
-      if (om) return GA.Ollama.save({ model: om.value });
-      const ov = e.target.closest("[data-ollama-vision]");
-      if (ov) return GA.Ollama.save({ visionModel: ov.value });
-      const ou = e.target.closest("[data-ollama-url]");
-      if (ou) return GA.Ollama.save({ url: ou.value.trim() || GA.Ollama.DEFAULT_URL });
       const pn = e.target.closest("[data-profile]");
       if (pn) Store.setDoc("profile", { [pn.dataset.profile]: pn.value.trim() });
     };
   }
 
-  /* Show Ollama's live status and the models actually installed. */
-  async function fillOllama(root) {
-    const st = U.$("[data-ollama-status]", root);
-    if (!st || GA.AI.mode() !== "ollama") return;
-    const [s, models] = await Promise.all([GA.Ollama.status(), GA.Ollama.installed()]);
-    st.textContent = s.state === "ok" ? `🟢 Running${s.version ? " · Ollama " + s.version : ""}` : s.state === "blocked" ? "🟠 Running, but needs permission for this website — run setup again" : "⚪ Not running — open the Ollama app";
-    const c = GA.Ollama.cfg();
-    const opts = (list, cur, off) => (off ? `<option value="">Off</option>` : "") + [...new Set(list.concat(cur ? [cur] : []))].map((m) => `<option ${m === cur ? "selected" : ""}>${U.esc(m)}</option>`).join("");
-    const sm = U.$("[data-ollama-model]", root);
-    const sv = U.$("[data-ollama-vision]", root);
-    if (sm && models.length) sm.innerHTML = opts(models, c.model, false);
-    if (sv && models.length) sv.innerHTML = opts(models, c.visionModel, true);
+  /* Show whether Grandma's brain is loaded, loading, or waiting. */
+  function fillBrain(root) {
+    const st = U.$("[data-brain-status]", root);
+    if (!st || GA.AI.mode() !== "local") return;
+    const s = GA.Brain.status();
+    st.textContent = s.state === "ready" ? "🟢 Awake and ready" : s.state === "loading" ? `🟡 Waking up… ${Math.round(s.progress * 100)}%` : s.state === "error" ? "🟠 Couldn't start — tap Change to try again" : "⚪ Asleep — wakes up when you chat";
   }
 
   function memoryForm(m) {
@@ -448,7 +439,7 @@
     render(root, params) {
       root.innerHTML = settingsHTML();
       wireSettings(root);
-      fillOllama(root);
+      fillBrain(root);
       const section = params[0];
       if (section) {
         const el = document.getElementById("set-" + section);
@@ -461,7 +452,7 @@
       const y = root.scrollTop;
       root.innerHTML = settingsHTML();
       root.scrollTop = y;
-      fillOllama(root);
+      fillBrain(root);
     },
   };
   GA.Views.profile = {

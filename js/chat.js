@@ -157,7 +157,7 @@
       return `<div class="msg user"><div class="bubble">${imgs}${U.esc(m.text || "")}</div></div>`;
     }
     if (m.role === "error") {
-      return `<div class="msg error">${U.avatar(30)}<div class="body"><p>${U.esc(m.text)}</p><div class="row"><button class="btn small primary" data-retry="${i}">${U.icon("refresh")}Try again</button>${m.setup ? `<button class="btn small ghost" data-ollama-setup>Open setup</button>` : ""}</div></div></div>`;
+      return `<div class="msg error">${U.avatar(30)}<div class="body"><p>${U.esc(m.text)}</p><div class="row"><button class="btn small primary" data-retry="${i}">${U.icon("refresh")}Try again</button>${m.setup ? `<button class="btn small ghost" data-brain-setup>Open setup</button>` : ""}</div></div></div>`;
     }
     return `<div class="msg grandma">${U.avatar(30)}<div class="body">
         ${m.text ? `<div class="content">${U.md(m.text)}</div>` : ""}
@@ -174,8 +174,8 @@
     if (ephemeral.kind === "connect") {
       return `<div class="msg notice">${U.avatar(30)}<div class="body">
           <p><strong>Let's get Grandma set up first.</strong></p>
-          <p class="muted">Grandma's AI runs free and private on your computer with Ollama. Setup takes a few minutes, and I'll walk you through it. Recipes, tasks, groceries, and the planner already work.</p>
-          <div class="row"><button class="btn small primary" data-ollama-setup>Set up Grandma</button><button class="btn small ghost" data-route="recipes">Browse recipes</button></div>
+          <p class="muted">Grandma's brain runs right here in your browser — free, private, nothing to install. The first time, your browser downloads her once. Recipes, tasks, groceries, and the planner already work.</p>
+          <div class="row"><button class="btn small primary" data-brain-setup>Turn on Grandma</button><button class="btn small ghost" data-route="recipes">Browse recipes</button></div>
         </div></div>`;
     }
     if (ephemeral.kind === "limit") {
@@ -347,10 +347,11 @@
           role: "error",
           text:
             e.kind === "offline" ? "Looks like you're offline. I'll be right here when you're back."
-            : e.kind === "ollama-offline" ? "I can't reach Ollama on this computer. Make sure the Ollama app is open, then try again."
-            : e.kind === "ollama-model" ? "My AI model isn't downloaded on this computer yet. Let's finish setup."
+            : e.kind === "brain-unsupported" ? "This browser can't run my brain. Chrome or Edge work best."
+            : e.kind === "brain-load" ? "I couldn't wake up just now. Let's try turning me on again."
+            : e.kind === "brain" ? "I got a little muddled there. Let's try that again."
             : "Grandma's having trouble connecting right now. Give it another try in a moment.",
-          setup: /^ollama/.test(e.kind || ""),
+          setup: /^brain-(load|unsupported)/.test(e.kind || ""),
           retry: { text, images: imageIds },
           ts: Date.now(),
         });

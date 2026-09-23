@@ -731,7 +731,7 @@ p { margin: 0; }
   .app, .main, .view, .page { height: auto; overflow: visible; display: block; }
 }
 
-/* ---------- Ollama setup wizard ---------- */
+/* ---------- "Turn on Grandma" setup ---------- */
 .setup-hero { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; }
 .setup-hero h3 { font-size: 17px; font-weight: 650; }
 .setup-hero p { font-size: 14.5px; margin-top: 2px; }

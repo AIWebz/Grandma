@@ -7,16 +7,17 @@
  * (backend/cloudflare-worker.js) as encrypted environment variables.
  *
  * Every section is optional. With nothing filled in, the app still runs:
- * data stays on this device, and Grandma helps each person set up Ollama.
+ * data stays on this device, and Grandma's AI runs inside each person's browser.
  * See README.md for step-by-step setup of each section.
  */
 window.GRANDMA_CONFIG = {
   ai: {
-    // Grandma's AI runs on each person's own computer with Ollama (free, no
-    // API key). The app walks people through installing it — nothing to set.
+    // Grandma's AI runs entirely inside each person's browser (WebLLM on
+    // WebGPU) — no install, no API key, nothing to set here.
     //
-    // Optional: to also offer AI on phones (where Ollama can't run), deploy
-    // backend/cloudflare-worker.js and put its URL here. Leave "" to use Ollama.
+    // Optional: to serve AI from a server instead (e.g. for browsers without
+    // WebGPU), deploy backend/cloudflare-worker.js and put its URL here.
+    // Leave "" to use the in-browser AI.
     endpoint: "",
   },
 

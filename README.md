@@ -6,7 +6,7 @@
 
 Grandma AI is a mobile-first AI assistant with a warm, practical, slightly sassy grandmotherly personality. The chat is the center of the app, and Grandma can **act** as well as talk. She creates recipes, saves them, builds grocery lists, adds chores and reminders, plans your day, remembers your preferences, and helps you preserve family recipes.
 
-Grandma's AI runs **on each person's own computer with [Ollama](https://ollama.com)**: free, private, and with no account or API key. The app walks people through installing Ollama and downloading Grandma's model, right from the website.
+Grandma's AI engine runs **entirely inside the web page**. There's nothing to install and no API key. The browser downloads an open AI model once, keeps it, and runs it on the device's graphics chip (WebGPU). After that Grandma works offline, and conversations never leave the device.
 
 It is plain **HTML, CSS, and vanilla JavaScript**. There is no Node.js, npm, `package.json`, bundler, or build step. You can edit the files directly on GitHub and host them on any static host, including GitHub Pages.
 
@@ -56,8 +56,8 @@ A static site can't safely hold secrets or run server code. This project is hone
 | Feature | Without any setup | Needs |
 | --- | --- | --- |
 | Tasks, grocery, planner, recipes, cookbook, memory list, settings | ✅ Works, stored on the device (IndexedDB) | — |
-| Talking to Grandma (real AI) | ✅ The in-app setup installs **Ollama** on the person's computer | Nothing from you. Optional: a hosted AI proxy for phones |
-| Reading handwritten recipes | ✅ With the optional photo model (chosen during setup) | — |
+| Talking to Grandma (real AI) | ✅ Runs in the browser after a one-time download (1–4.5 GB) | A browser with WebGPU. Optional: a hosted AI proxy for other browsers |
+| Reading handwritten recipes | ✅ In-browser text reading (Tesseract) + Grandma organizes it | Works best with neat handwriting |
 | Accounts (email, Google), cloud sync, households | "This device only" mode | **Supabase** (free tier is fine) |
 | Daily AI limits per plan | None needed: local AI runs on the person's own computer | Only for the optional hosted proxy |
 | Web subscriptions | Buttons say "not set up yet" | **Stripe** Payment Links + the proxy's webhook |
@@ -83,7 +83,8 @@ js/
   account.js            Supabase auth, cloud sync, households, photo storage
   plans.js              Plans, pricing math, limits, purchases, restore
   ai.js                 Grandma's system prompt, tool definitions, request loop
-  ollama.js             Local AI via Ollama + the in-app setup wizard
+  brain.js              Grandma's in-browser AI engine + the "Turn on Grandma" setup
+  brain-worker.js       Runs the engine in a background thread
   actions.js            Tool implementations (tasks, groceries, recipes, plan, memory)
   chat.js               Conversation UI, action cards, composer, voice, retry
   recipe-ui.js          Recipe cards/detail and Start Cooking mode
@@ -92,6 +93,7 @@ js/
   notify.js             Friendly notifications scheduler
   views/                Recipes, Tasks, Grocery, Planner, Cookbook, Settings/Profile/Pricing
 data/recipes.js         Built-in traditional recipes
+vendor/web-llm/         WebLLM engine (Apache-2.0), bundled so no CDN is needed
 assets/logo, assets/icons  Grandma artwork, avatar, app icons (192, 512, maskable, Apple touch, 1024)
 backend/
   cloudflare-worker.js  Payment/ad webhooks + optional hosted AI (paste into Cloudflare)
@@ -115,7 +117,7 @@ python3 -m http.server 8080
 
 Other options: VS Code's "Live Server" extension, `php -S localhost:8080`, or `caddy file-server`. You can also double-click `index.html`, but some features (the service worker, installing as an app) need `http://`.
 
-On first open, Grandma asks your name and preferred personality, then opens **Set up Grandma's AI** (step 3). Everything except the AI works right away, even before setup.
+On first open, Grandma asks your name and preferred personality, then opens **Turn on Grandma** (step 3). Everything except the AI works right away, even before setup.
 
 ---
 
@@ -134,40 +136,47 @@ The included `.nojekyll` file tells Pages to serve the files as-is.
 
 Other static hosts work the same way: Cloudflare Pages, Netlify, Vercel (as static), or S3/CloudFront. Point them at the repository root with **no build command**.
 
-> GitHub Pages only serves files. It can't keep secrets or run the payment webhooks; that's the job of the small backend in `backend/cloudflare-worker.js`. Grandma's AI runs locally in Ollama and needs no server.
+> GitHub Pages only serves files. It can't keep secrets or run the payment webhooks; that's the job of the small backend in `backend/cloudflare-worker.js`. Grandma's AI runs inside the browser and needs no server.
 
 ---
 
 ## 3. Configure the AI API
 
-**There's nothing to configure and no API key.** Grandma runs locally with [Ollama](https://ollama.com), and the app installs it with each person. The setup wizard opens after the welcome screen, and anytime from **Settings → Grandma's AI** or the "Set up Grandma" button in chat. It has four steps:
+**There's nothing to configure, nothing to install, and no API key.** Grandma's AI engine is built into the website:
 
-1. **Install Ollama.** A download button for the person's system: the Windows installer, the Mac app, or the one-line Linux install command.
-2. **Connect.** The page checks `http://localhost:11434` every 2 seconds until it finds Ollama. If Ollama is running but hasn't allowed this website yet, the wizard shows the exact one-line command for that system, with this site's address filled in, plus a Copy button:
-   - Windows: `setx OLLAMA_ORIGINS "https://your-site"`, then quit and reopen Ollama
-   - Mac: `launchctl setenv OLLAMA_ORIGINS "https://your-site"`, then quit and reopen Ollama
-   - Linux: a systemd override that sets `OLLAMA_ORIGINS` and restarts the service
+- `vendor/web-llm/` is [WebLLM](https://github.com/mlc-ai/web-llm) (Apache-2.0), bundled in the repo as a single file, so there's no CDN and no build step. It runs open AI models on the device's graphics chip through **WebGPU**.
+- `js/brain.js` runs the engine in a background thread (`js/brain-worker.js`) so the page stays smooth. It connects the engine to Grandma's personality and her actions.
 
-   When the app runs from `localhost` (step 1), this step is skipped, because Ollama allows localhost by default.
-3. **Download Grandma's brain.** The wizard downloads the model through Ollama with a live progress bar. There are three choices:
-   - **`llama3.1:8b`** (4.9 GB, recommended)
-   - **`llama3.2:3b`** (2 GB, for smaller computers)
-   - the optional **`qwen2.5vl:7b`** photo model (6 GB), which reads handwritten recipe cards and attached photos
-4. **Done.** Grandma is ready.
+**Turning Grandma on.** The first time someone chats, or right after the welcome screen, a **Turn on Grandma** sheet offers three brain sizes:
 
-Grandma's actions (tasks, recipes, grocery lists, plans, memories) use Ollama's tool calling. `js/ollama.js` converts between Ollama's API and the app's action loop in `js/ai.js`. It also catches small models that write a tool call as plain text instead of calling it.
+| Choice | Model | Download |
+| --- | --- | --- |
+| **Recommended** | Qwen2.5 3B Instruct | about 2 GB |
+| **Lighter** (phones, older computers) | Qwen2.5 1.5B Instruct | about 1 GB |
+| **Smartest** (strong graphics card) | Qwen2.5 7B Instruct | about 4.5 GB |
 
-You can change the chat model, the photo model, or the Ollama address anytime in **Settings → Grandma's AI**. Any installed Ollama model with tool support works.
+The browser downloads the model once from Hugging Face, with a progress bar, and keeps it in its own storage (the app asks the browser to keep it). On later visits Grandma loads from the device in the background, even offline. You can change the size or remove the download in **Settings → Grandma's AI**.
 
-**Limits to know about:**
+**How the actions work.** Small on-device models do best with one clear format. Grandma answers in a strict JSON shape, `{"actions": [...], "reply": "..."}`, and the engine enforces that shape while it writes, so the output is always valid JSON. The actions (add tasks, create a recipe, grocery lists, plans, memories) run through the same handlers as everything else in the app, and each one shows a live card in the chat. Unknown action names are ignored.
 
-- Ollama runs on Windows, Mac, and Linux computers, not phones. On a phone the rest of the app works, and the wizard explains that the AI needs a computer. To offer AI on phones too, the app owner can deploy the optional hosted proxy below.
-- The browser must be allowed to reach `localhost`. Chrome, Edge, and Firefox work. Chrome may ask to let the site connect to apps on this device; choose **Allow**. Safari may block `http://localhost` from an `https://` site, so the wizard suggests another browser.
-- A local model is slower and less capable than a large cloud model, and replies depend on the computer's speed.
+**Photos.** Recipe cards and attached photos are read in the browser with [Tesseract.js](https://github.com/naptha/tesseract.js), loaded from jsDelivr only when needed. Grandma then organizes the text into ingredients, steps, servings, and time. The original photo is always kept. Neat handwriting and printed cards work best. Grandma can read text in photos, but she can't describe pictures.
 
-### Optional: hosted AI (for phones)
+**What browsers work.** Grandma's brain needs WebGPU:
 
-If you, the app owner, want AI to also work on phones, deploy `backend/cloudflare-worker.js` (see the comments at the top of that file) and put its URL in `config.js → ai.endpoint`. Your model key stays secret on Cloudflare; users never enter anything. When `ai.endpoint` is set, the app uses the hosted AI instead of Ollama and enforces the plan limits (`LIMIT_FREE`, `LIMIT_PLUS`, `LIMIT_PRO`) through a KV namespace bound as `USAGE`.
+- Chrome and Edge on Windows, Mac, ChromeOS, and Android
+- Safari on iOS 26 / macOS 26 or newer
+
+On other browsers the sheet explains what to use instead. Recipes, tasks, groceries, the planner, and the cookbook work everywhere.
+
+**Trade-offs to know about:**
+
+- The first download is big. The sheet recommends Wi-Fi.
+- A small model running on a phone or laptop is slower and less clever than a large cloud model. It may occasionally miss an action or get a detail wrong. The Smartest option helps if the device can handle it.
+- It uses the device's graphics memory while running. If a device runs out, the sheet suggests the Lighter option.
+
+### Optional: hosted AI (for browsers without WebGPU)
+
+If you, the app owner, also want AI on browsers that can't run it themselves, deploy `backend/cloudflare-worker.js` (see the comments at the top of that file) and put its URL in `config.js → ai.endpoint`. Your model key stays secret on Cloudflare; users never enter anything. When `ai.endpoint` is set, the app uses the hosted AI instead of the in-browser engine and enforces the plan limits (`LIMIT_FREE`, `LIMIT_PLUS`, `LIMIT_PRO`) through a KV namespace bound as `USAGE`.
 
 ---
 
@@ -302,7 +311,7 @@ On the web these fire while the app is open, or installed and running. For deliv
 
 ## Security
 
-- **No API keys at all for the AI.** Grandma runs in Ollama on the person's computer, so conversations stay on that computer.
+- **No API keys at all for the AI.** Grandma's brain runs inside the browser, so conversations stay on the device.
 - **No secrets in the frontend or the repo.** `config.js` holds only public values: the Supabase anon key and payment *links*. The Stripe secret, webhook secrets, and Supabase service role key live only as encrypted Cloudflare secrets.
 - The worker only accepts your `ALLOWED_ORIGINS`. It caps request size and output tokens, accepts only custom tools and uploaded images, and prepends safety rules the client can't remove.
 - Plans are written only by verified webhooks: a Stripe signature, a RevenueCat auth header, or an AdMob ECDSA signature.
