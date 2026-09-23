@@ -295,9 +295,14 @@
 
   /* While a reply waits on Grandma's brain downloading, say so (and how far along). */
   function brainNote() {
-    const s = GA.AI.mode() === "local" ? GA.Brain.status() : null;
-    if (!s || s.state !== "loading" || !/^Downloading/.test(s.text || "")) return "";
-    return `${U.esc(s.text)} — one moment, Grandma is getting her brain ready on this device.`;
+    if (GA.AI.mode() !== "local") return "";
+    const s = GA.Brain.status();
+    if (s.state === "loading") {
+      return /^Downloading/.test(s.text || "")
+        ? `${U.esc(s.text)} — one moment, Grandma is getting her brain ready on this device.`
+        : `Getting Grandma ready${s.progress ? ` — ${Math.round(s.progress * 100)}%` : "…"}`;
+    }
+    return U.esc(GA.Brain.activity());
   }
   function updateBrainNote() {
     const n = el.thread && el.thread.querySelector("[data-brain-dl]");
@@ -338,9 +343,18 @@
         signal: abort.signal,
         resolveImages,
         onProgress(t, cards) {
+          const sameCards = cards.length === pending.cards.length;
           pending.text = t;
           pending.cards = cards.slice();
           if (visible && convId === currentId) {
+            // Words streaming in: update just her bubble instead of the whole thread.
+            const box = sameCards && el.thread.querySelector("#pending-msg .content");
+            if (box) {
+              const stick = nearBottom();
+              box.innerHTML = U.md(t);
+              if (stick) toBottom();
+              return;
+            }
             const stick = nearBottom();
             render();
             if (stick) toBottom();
@@ -379,9 +393,10 @@
             e.kind === "offline" ? "Looks like you're offline. I'll be right here when you're back."
             : e.kind === "brain-unsupported" ? "My brain couldn't start on this device. Let's try the Phone version."
             : e.kind === "brain-load" ? "I couldn't wake up just now. Let's try turning me on again."
+            : e.kind === "brain-stuck" ? "Sorry, I got stuck thinking — this device may be too slow for the brain size I'm using. Try again, or pick a smaller one in setup."
             : e.kind === "brain" ? "I got a little muddled there. Let's try that again."
             : "Grandma's having trouble connecting right now. Give it another try in a moment.",
-          setup: /^brain-(load|unsupported)/.test(e.kind || ""),
+          setup: /^brain-(load|unsupported|stuck)/.test(e.kind || ""),
           retry: { text, images: imageIds },
           ts: Date.now(),
         });

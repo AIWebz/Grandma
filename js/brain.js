@@ -34,8 +34,12 @@
   const isMobile = () => /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
   const MAX_OUTPUT = 1100;
+  // How long Grandma may go quiet before we call her stuck (milliseconds).
+  const TIMEOUTS = { gpuFirst: 90000, gpuGap: 30000, cpuFirst: 180000, cpuGap: 45000 };
   // Processor models read more slowly, so they get a shorter conversation.
-  const budget = () => (backend && backend.kind === "cpu" ? { history: 2000, context: 1400, ctx: 4096 } : { history: 4200, context: 2400 });
+  const budget = (tight) =>
+    tight ? { history: 0, context: 500 } : backend && backend.kind === "cpu" ? { history: 1500, context: 1000 } : { history: 4200, context: 2400 };
+  const maxOutput = () => (backend && backend.kind === "cpu" ? 500 : MAX_OUTPUT);
 
   const cfg = () => ({ model: "3b", ready: false, ...(Store.doc("local").brain || {}) });
   const save = (patch) => Store.setDoc("local", { brain: { ...cfg(), ...patch } });
@@ -116,9 +120,18 @@
       return {
         kind: "gpu",
         id,
-        async complete({ messages, temperature, max_tokens, schema }) {
-          const res = await eng.chat.completions.create({ messages, temperature, max_tokens, response_format: { type: "json_object", schema: JSON.stringify(schema) } });
-          return { text: res.choices[0].message.content || "", finish: res.choices[0].finish_reason };
+        async complete({ messages, temperature, max_tokens, schema, onDelta }) {
+          const stream = await eng.chat.completions.create({ messages, temperature, max_tokens, stream: true, response_format: { type: "json_object", schema: JSON.stringify(schema) } });
+          let text = "";
+          let finish = "";
+          for await (const chunk of stream) {
+            const c = chunk.choices && chunk.choices[0];
+            if (!c) continue;
+            if (c.delta && c.delta.content) text += c.delta.content;
+            if (c.finish_reason) finish = c.finish_reason;
+            onDelta(text);
+          }
+          return { text, finish };
         },
         stop() { try { eng.interruptGenerate(); } catch (e) { /* ignore */ } },
         async unload() {
@@ -149,18 +162,28 @@
     return {
       kind: "cpu",
       id: m.url,
-      async complete({ messages, temperature, max_tokens, schema }) {
+      async complete({ messages, temperature, max_tokens, schema, onDelta }) {
         ctl = new AbortController();
         try {
-          const res = await wl.createChatCompletion({
+          const stream = await wl.createChatCompletion({
             messages,
             temperature,
             max_tokens,
+            stream: true,
             cache_prompt: true, // reuse the unchanged start of the prompt between turns
             abortSignal: ctl.signal,
             response_format: { type: "json_schema", json_schema: { name: "answer", schema } },
           });
-          return { text: res.choices[0].message.content || "", finish: res.choices[0].finish_reason };
+          let text = "";
+          let finish = "";
+          for await (const chunk of stream) {
+            const c = chunk.choices && chunk.choices[0];
+            if (!c) continue;
+            if (c.delta && c.delta.content) text += c.delta.content;
+            if (c.finish_reason) finish = c.finish_reason;
+            onDelta(text);
+          }
+          return { text, finish };
         } finally {
           ctl = null;
         }
@@ -169,6 +192,62 @@
       async unload() { try { await wl.exit(); } catch (e) { /* ignore */ } },
     };
   }
+
+  /*
+   * Run one request on the engine, streaming. Never hangs: if the engine goes
+   * quiet for too long (a phone that's too slow, or a crashed engine), it is
+   * stopped and restarted next time, and the person gets a clear message.
+   */
+  async function generate(opts, { signal, onDelta } = {}) {
+    const eng = await load();
+    if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const cpu = eng.kind === "cpu";
+    const FIRST = cpu ? TIMEOUTS.cpuFirst : TIMEOUTS.gpuFirst; // reading the prompt before the first word
+    const GAP = cpu ? TIMEOUTS.cpuGap : TIMEOUTS.gpuGap; // between words
+    let timer = null;
+    let fail = null;
+    const failed = new Promise((_, reject) => (fail = reject));
+    failed.catch(() => {});
+    const arm = (ms) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        eng.stop();
+        if (backend === eng) {
+          backend = null; // start fresh next time
+          eng.unload().catch(() => {});
+          status.state = "idle";
+          emit();
+        }
+        fail(new GA.AI.AIError("brain-stuck", "Grandma's brain stopped responding."));
+      }, ms);
+    };
+    const onAbort = () => {
+      eng.stop();
+      fail(new DOMException("Aborted", "AbortError"));
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    arm(FIRST);
+    try {
+      return await Promise.race([
+        eng.complete({ ...opts, onDelta: (text) => { arm(GAP); onDelta && onDelta(text); } }),
+        failed,
+      ]);
+    } catch (e) {
+      if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
+      if (e instanceof GA.AI.AIError) throw e;
+      throw new GA.AI.AIError(/context size|exceeds? the (available )?context|too long/i.test(String(e && e.message)) ? "brain-context" : "brain", String((e && e.message) || e));
+    } finally {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /* What Grandma is busy with while someone waits (shown under the typing dots). */
+  let activity = "";
+  const setActivity = (t) => {
+    activity = t;
+    emit();
+  };
 
   /* Start (or reuse) the engine. Loads from the browser cache after the first download. */
   async function load(onProgress) {
@@ -247,7 +326,7 @@
   /* ---------------- prompt ---------------- */
   const LOCAL_PROMPT = `You are Grandma AI: an AI assistant with a warm, practical, funny grandmotherly personality. You help with cooking, chores, planning the day, groceries, reminders, family recipes, and encouragement. You are an AI — not a human and not anyone's real grandmother.
 
-Always answer with JSON: {"actions": [...], "reply": "..."}
+Always answer with JSON: {"reply": "...", "actions": [...]}
 - "reply": what you say. Short, warm, natural (1-4 sentences; light markdown is fine). Use "sweetheart" only now and then.
 - "actions": things to do in the app right now, each {"name": "...", "arguments": {...}}. Use [] when nothing needs doing.
 - When they ask you to add, remind, plan, make a list, save, or remember something, include the matching action. Never say you did something without the action.
@@ -303,17 +382,17 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
   };
 
   /* Write one full recipe with the engine enforcing the recipe shape. */
-  async function recipe({ request, prefs, servings }) {
-    const eng = await load();
-    const res = await eng.complete({
+  async function recipe({ request, prefs, servings, signal }) {
+    await load();
+    const res = await generate({
       messages: [
         { role: "system", content: GA.AI.RECIPE_WRITER + ' Use qty 0 and unit "" for "to taste". Pick one food emoji.' },
         { role: "user", content: `Write a recipe for: ${request}\nServings: ${servings || 4}${prefs ? "\nAbout this cook:\n" + prefs : ""}` },
       ],
       temperature: 0.6,
-      max_tokens: 1500,
+      max_tokens: backend && backend.kind === "cpu" ? 1000 : 1500,
       schema: RECIPE_SCHEMA,
-    });
+    }, { signal });
     return parseJSON(res.text);
   }
 
@@ -321,7 +400,9 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
 
   const responseSchema = (tools) => ({
       type: "object",
+      // "reply" comes first so her words can appear while she's still working.
       properties: {
+        reply: { type: "string" },
         actions: {
           type: "array",
           items: {
@@ -330,15 +411,14 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
             required: ["name", "arguments"],
           },
         },
-        reply: { type: "string" },
       },
-      required: ["actions", "reply"],
+      required: ["reply", "actions"],
   });
 
   /* Grandma's stored conversation → short chat for a small model. */
-  async function toMessages(system, messages, tools) {
+  async function toMessages(system, messages, tools, tight) {
     const tone = ((system[0] && system[0].text) || "").match(/Tone for this person:[^\n]*/);
-    const { history, context: contextChars } = budget();
+    const { history, context: contextChars } = budget(tight);
     const context = ((system[1] && system[1].text) || "").slice(0, contextChars);
     const sys = [LOCAL_PROMPT, tone ? tone[0] : "", tools.length ? "Actions you can use:\n" + toolDocs(tools) : "Answer with actions: [] this time.", context].filter(Boolean).join("\n\n");
 
@@ -351,7 +431,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
       else if (m.role === "assistant") {
         const said = m.content.filter((b) => b.type === "text" && b.text !== "…").map((b) => b.text).join("\n");
         const did = m.content.filter((b) => b.type === "tool_use").map((b) => b.name);
-        text = JSON.stringify({ actions: did.map((n) => ({ name: n, arguments: {} })), reply: said });
+        text = JSON.stringify({ reply: said, actions: did.map((n) => ({ name: n, arguments: {} })) });
       } else {
         if (m.content.every((b) => b.type === "tool_result")) continue;
         const parts = [];
@@ -382,6 +462,18 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     return [{ role: "system", content: sys }, ...recent];
   }
 
+  /* The "reply" text so far, from JSON that's still being written. */
+  const partialReply = (raw) => {
+    const m = String(raw || "").match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (!m) return "";
+    const body = m[1].replace(/\\u[0-9a-fA-F]{0,3}$|\\$/, "");
+    try {
+      return JSON.parse('"' + body + '"');
+    } catch (e) {
+      return "";
+    }
+  };
+
   const parseJSON = (s) => {
     try {
       return JSON.parse(s);
@@ -393,7 +485,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
   };
 
   /* One turn. Returns the same shape as the hosted API so js/ai.js's loop works unchanged. */
-  async function chat({ system, messages, tools, signal }) {
+  async function chat({ system, messages, tools, signal, onText }) {
     tools = tools || [];
     const last = messages[messages.length - 1];
     // Grandma already wrote her reply alongside the actions; after they run we
@@ -402,34 +494,30 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
       const failed = last.content.filter((b) => b.is_error).map((b) => (parseJSON(b.content) || {}).error).filter(Boolean);
       return { content: failed.length ? [{ type: "text", text: `Hmm, one thing didn't go through: ${failed[0]}` }] : [], stop_reason: "end_turn" };
     }
-    const eng = await load();
-    const msgs = await toMessages(system, messages, tools);
-    const onAbort = () => eng.stop();
-    if (signal) {
-      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-    let raw;
+    await load();
+    const schema = responseSchema(tools.length ? tools : [{ name: "none" }]);
+    let shown = "";
+    const onDelta = (text) => {
+      const r = partialReply(text);
+      if (r && r !== shown) {
+        shown = r;
+        onText && onText(r);
+      }
+    };
+    const ask = async (tight) => generate({ messages: await toMessages(system, messages, tools, tight), temperature: 0.5, max_tokens: maxOutput(), schema }, { signal, onDelta });
+    let res;
     try {
-      const res = await eng.complete({
-        messages: msgs,
-        temperature: 0.5,
-        max_tokens: MAX_OUTPUT,
-        schema: responseSchema(tools.length ? tools : [{ name: "none" }]),
-      });
-      raw = res.text;
-      var finish = res.finish;
+      res = await ask(false);
     } catch (e) {
-      if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
-      throw new GA.AI.AIError("brain", String((e && e.message) || e));
-    } finally {
-      if (signal) signal.removeEventListener("abort", onAbort);
+      if (e.kind !== "brain-context") throw e;
+      res = await ask(true); // long conversation: try again with just the latest message
     }
-    if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const raw = res.text;
+    const finish = res.finish;
 
     const j = parseJSON(raw);
     if (!j) {
-      const text = raw.replace(/[{}"]/g, "").trim();
+      const text = partialReply(raw).trim();
       return { content: text ? [{ type: "text", text }] : [], stop_reason: finish === "length" ? "max_tokens" : "end_turn" };
     }
     const names = new Set(tools.map((t) => t.name));
@@ -445,10 +533,16 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
       if (a.name !== "create_recipe" || GA.Kitchen.normalize(a.arguments) || GA.Plans.recipeGensLeft() <= 0) continue;
       const args = a.arguments || {};
       const request = [args.name, args.notes, `(They said: "${userText.slice(0, 300)}")`].filter(Boolean).join(". ");
+      setActivity("Writing out the full recipe…");
       try {
-        const full = await recipe({ request, prefs: GA.Kitchen.prefs(), servings: args.servings || GA.Kitchen.defaultServings() });
+        const full = await recipe({ request, prefs: GA.Kitchen.prefs(), servings: args.servings || GA.Kitchen.defaultServings(), signal });
         if (full) a.arguments = full;
-      } catch (e) { /* the handler reports the problem */ }
+      } catch (e) {
+        if (e.name === "AbortError" || e.kind === "brain-stuck") throw e;
+        /* otherwise the handler reports the problem */
+      } finally {
+        setActivity("");
+      }
     }
     const content = [];
     if (j.reply && String(j.reply).trim()) content.push({ type: "text", text: String(j.reply).trim() });
@@ -463,8 +557,8 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
       try { text += (await ocr(b64)) + "\n\n"; } catch (e) { throw new GA.AI.AIError("brain", "Couldn't load the photo reader."); }
     }
     if (images.length && text.trim().length < 12) return { legible: false, title: "", ingredients: [], instructions: [] };
-    const eng = await load();
-    const res = await eng.complete({
+    await load();
+    const res = await generate({
       messages: [
         { role: "system", content: system },
         { role: "user", content: `${instruction}\n\nText read from the photo (it may contain reading mistakes; fix obvious ones only):\n${text.slice(0, 5000)}` },
@@ -612,6 +706,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
 
   GA.Brain = {
     MODELS,
+    TIMEOUTS,
     cfg,
     save,
     support,
@@ -625,6 +720,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     ocr,
     openSetup,
     engine: () => (backend ? backend.kind : ""),
+    activity: () => activity,
     status: () => status,
     onStatus: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
     async forget() {

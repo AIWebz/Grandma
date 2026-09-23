@@ -373,10 +373,10 @@ Honesty and safety (these never change, whatever tone is selected):
     },
     connected: () => AI.mode() !== "none",
 
-    async request({ system, messages, tools, maxTokens = 8000, purpose = "chat", signal }) {
+    async request({ system, messages, tools, maxTokens = 8000, purpose = "chat", signal, onText }) {
       const mode = AI.mode();
       if (mode === "none") throw new AIError("config", "Grandma's AI isn't set up yet.");
-      if (mode === "local") return GA.Brain.chat({ system, messages, tools, maxTokens, signal });
+      if (mode === "local") return GA.Brain.chat({ system, messages, tools, maxTokens, signal, onText });
       if (!navigator.onLine) throw new AIError("offline", "You're offline.");
 
       let res;
@@ -422,7 +422,9 @@ Honesty and safety (these never change, whatever tone is selected):
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           let messages = prepareHistory(api);
           if (resolveImages) messages = await resolveImages(messages);
-          const resp = await AI.request({ system: systemPrompt(extra), messages, tools: toolsFor(), signal });
+          // Her words so far, shown while she's still writing (in-browser AI).
+          const onText = (t) => onProgress && onProgress([...texts, t].join("\n\n"), cards);
+          const resp = await AI.request({ system: systemPrompt(extra), messages, tools: toolsFor(), signal, onText });
           if (resp.stop_reason === "refusal") {
             api.length = startLen;
             return { text: "I'm going to sit this one out, but I'm happy to help with something else — a recipe, a plan for the day, or a list. ❤️", cards: [], refused: true };
