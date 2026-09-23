@@ -114,7 +114,7 @@
       GA.App.go("recipes/" + rec.id);
     } catch (e) {
       gen.busy = false;
-      gen.error = e.kind === "config" ? "Grandma's AI isn't turned on yet." : e.kind === "brain-unsupported" ? "This browser can't run Grandma's AI. Try Chrome or Edge." : "I couldn't make that recipe right now. Let's try again.";
+      gen.error = e.kind === "config" ? "Grandma's AI isn't turned on yet." : e.kind === "brain-unsupported" ? "Grandma's AI couldn't start on this device. Try the Phone version in Settings." : "I couldn't make that recipe right now. Let's try again.";
       renderMaker(root);
     }
   }

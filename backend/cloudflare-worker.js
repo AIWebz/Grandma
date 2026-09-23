@@ -14,10 +14,12 @@
  *   GET  /health             Quick check that the worker is up
  *
  * Secrets (encrypted):
- *   ANTHROPIC_API_KEY          required
+ *   STRIPE_SECRET_KEY          your Stripe secret key (sk_live_… / rk_live_…) — web subscriptions.
+ *                              It goes HERE, as an encrypted secret, never in config.js or the repo.
+ *   STRIPE_WEBHOOK_SECRET      the webhook signing secret (whsec_…) for /stripe/webhook
  *   SUPABASE_SERVICE_ROLE_KEY  needed for accounts, plans and webhooks
- *   STRIPE_SECRET_KEY          needed for web subscriptions
- *   STRIPE_WEBHOOK_SECRET      needed for web subscriptions
+ *   ANTHROPIC_API_KEY          only if you turn on optional hosted AI (/v1/chat);
+ *                              Grandma's AI normally runs in each person's browser
  *   REVENUECAT_WEBHOOK_AUTH    needed for app store subscriptions
  * Plain variables:
  *   ALLOWED_ORIGINS   comma-separated, e.g. "https://you.github.io,https://app.yourdomain.com"

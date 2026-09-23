@@ -2,7 +2,8 @@
  * Grandma AI — talking to the model.
  *
  * By default Grandma's AI runs entirely inside the web page (js/brain.js,
- * WebLLM on WebGPU), so nobody installs anything or needs an API key. An app
+ * WebLLM on the graphics chip, or wllama on the processor for phones and
+ * tablets), so nobody installs anything or needs an API key. An app
  * owner can optionally host AI instead with backend/cloudflare-worker.js.
  *
  * Grandma performs real actions through tool use: the model asks for a tool,
@@ -363,7 +364,7 @@ Honesty and safety (these never change, whatever tone is selected):
     /*
      * "local"  — Grandma's brain runs inside this browser (default).
      * "proxy"  — optional: the app owner hosts AI behind backend/cloudflare-worker.js
-     *            (for browsers without WebGPU). No user keys either way.
+     *            (e.g. for very old devices). No user keys either way.
      */
     mode() {
       if (CFG.endpoint) return "proxy";

@@ -6,7 +6,7 @@
 
 Grandma AI is a mobile-first AI assistant with a warm, practical, slightly sassy grandmotherly personality. The chat is the center of the app, and Grandma can **act** as well as talk. She creates recipes, saves them, builds grocery lists, adds chores and reminders, plans your day, remembers your preferences, and helps you preserve family recipes.
 
-Grandma's AI engine runs **entirely inside the web page**. There's nothing to install and no API key. The browser downloads an open AI model once, keeps it, and runs it on the device's graphics chip (WebGPU). After that Grandma works offline, and conversations never leave the device.
+Grandma's AI engine runs **entirely inside the web page**. There's nothing to install and no API key. The browser downloads an open AI model once, keeps it, and runs it on the device's graphics chip (WebGPU) or, on phones and tablets without that, on the processor, so it works on iPhones, iPads, and Android too. After that Grandma works offline, and conversations never leave the device.
 
 It is plain **HTML, CSS, and vanilla JavaScript**. There is no Node.js, npm, `package.json`, bundler, or build step. You can edit the files directly on GitHub and host them on any static host, including GitHub Pages.
 
@@ -56,7 +56,7 @@ A static site can't safely hold secrets or run server code. This project is hone
 | Feature | Without any setup | Needs |
 | --- | --- | --- |
 | Tasks, grocery, planner, recipes, cookbook, memory list, settings | ✅ Works, stored on the device (IndexedDB) | — |
-| Talking to Grandma (real AI) | ✅ Runs in the browser after a one-time download (1–4.5 GB) | A browser with WebGPU. Optional: a hosted AI proxy for other browsers |
+| Talking to Grandma (real AI) | ✅ Runs in the browser after a one-time download (0.5–4.5 GB) | Any modern browser, including iPhone/iPad Safari. Optional: a hosted AI proxy |
 | Reading handwritten recipes | ✅ In-browser text reading (Tesseract) + Grandma organizes it | Works best with neat handwriting |
 | Accounts (email, Google), cloud sync, households | "This device only" mode | **Supabase** (free tier is fine) |
 | Daily AI limits per plan | None needed: local AI runs on the person's own computer | Only for the optional hosted proxy |
@@ -93,7 +93,8 @@ js/
   notify.js             Friendly notifications scheduler
   views/                Recipes, Tasks, Grocery, Planner, Cookbook, Settings/Profile/Pricing
 data/recipes.js         Built-in traditional recipes
-vendor/web-llm/         WebLLM engine (Apache-2.0), bundled so no CDN is needed
+vendor/web-llm/         WebLLM engine (Apache-2.0): runs on the graphics chip (WebGPU)
+vendor/wllama/          wllama engine (MIT, llama.cpp in WebAssembly): runs on the processor — iPhone, iPad, any phone
 assets/logo, assets/icons  Grandma artwork, avatar, app icons (192, 512, maskable, Apple touch, 1024)
 backend/
   cloudflare-worker.js  Payment/ad webhooks + optional hosted AI (paste into Cloudflare)
@@ -144,16 +145,23 @@ Other static hosts work the same way: Cloudflare Pages, Netlify, Vercel (as stat
 
 **There's nothing to configure, nothing to install, and no API key.** Grandma's AI engine is built into the website:
 
-- `vendor/web-llm/` is [WebLLM](https://github.com/mlc-ai/web-llm) (Apache-2.0), bundled in the repo as a single file, so there's no CDN and no build step. It runs open AI models on the device's graphics chip through **WebGPU**.
-- `js/brain.js` runs the engine in a background thread (`js/brain-worker.js`) so the page stays smooth. It connects the engine to Grandma's personality and her actions.
+- `vendor/web-llm/` is [WebLLM](https://github.com/mlc-ai/web-llm) (Apache-2.0). It runs open AI models on the device's graphics chip through **WebGPU**. This is the fast path for computers and newer phones.
+- `vendor/wllama/` is [wllama](https://github.com/ngxson/wllama) (MIT), which is llama.cpp compiled to WebAssembly. It runs a small model on the device's **processor**, so it needs nothing special from the browser. It works on **every iPhone, iPad, and Android phone**, and on any computer. `vendor/wllama/compat/` is the build that Safari needs, and it's served from your site too.
+- Both engines are bundled in the repo as plain files, so there's no CDN and no build step. `js/brain.js` picks the engine, runs it in a background thread so the page stays smooth, and connects it to Grandma's personality and her actions.
 
-**Turning Grandma on.** The first time someone chats, or right after the welcome screen, a **Turn on Grandma** sheet offers three brain sizes:
+**Turning Grandma on.** The first time someone chats, or right after the welcome screen, a **Turn on Grandma** sheet checks the device and offers the brains it can run:
 
-| Choice | Model | Download |
-| --- | --- | --- |
-| **Recommended** | Qwen2.5 3B Instruct | about 2 GB |
-| **Lighter** (phones, older computers) | Qwen2.5 1.5B Instruct | about 1 GB |
-| **Smartest** (strong graphics card) | Qwen2.5 7B Instruct | about 4.5 GB |
+| Choice | Engine | Model | Download |
+| --- | --- | --- | --- |
+| **Recommended** | graphics chip | Qwen2.5 3B Instruct | about 2 GB |
+| **Lighter** (newer phones, older computers) | graphics chip | Qwen2.5 1.5B Instruct | about 1 GB |
+| **Smartest** (Grandma Pro, strong graphics card) | graphics chip | Qwen2.5 7B Instruct | about 4.5 GB |
+| **Phone** (any iPhone, iPad, Android) | processor | Qwen2.5 0.5B Instruct (GGUF) | about 500 MB |
+| **Phone+** (newer iPhones/iPads, computers) | processor | Qwen2.5 1.5B Instruct (GGUF) | about 1.1 GB |
+
+- **No WebGPU** (older iPhones/iPads, older Android, Firefox): the sheet shows only **Phone** and **Phone+**.
+- **Phones with WebGPU**: the sheet starts on **Lighter**.
+- **Any device**: a "works-anywhere" link reveals the processor versions. If a download runs out of memory, the sheet automatically steps down to a smaller option.
 
 The browser downloads the model once from Hugging Face, with a progress bar, and keeps it in its own storage (the app asks the browser to keep it). On later visits Grandma loads from the device in the background, even offline. You can change the size or remove the download in **Settings → Grandma's AI**.
 
@@ -161,22 +169,23 @@ The browser downloads the model once from Hugging Face, with a progress bar, and
 
 **Photos.** Recipe cards and attached photos are read in the browser with [Tesseract.js](https://github.com/naptha/tesseract.js), loaded from jsDelivr only when needed. Grandma then organizes the text into ingredients, steps, servings, and time. The original photo is always kept. Neat handwriting and printed cards work best. Grandma can read text in photos, but she can't describe pictures.
 
-**What browsers work.** Grandma's brain needs WebGPU:
+**What browsers work.** All modern browsers work:
 
-- Chrome and Edge on Windows, Mac, ChromeOS, and Android
-- Safari on iOS 26 / macOS 26 or newer
+- **Graphics chip (fast):** Chrome and Edge on Windows, Mac, ChromeOS, and Android, and Safari on iOS 26 / macOS 26 or newer.
+- **Processor (everywhere else):** iPhones and iPads on older iOS, Firefox, and other phones. Replies take longer to start there, because a phone's processor reads the prompt more slowly than a graphics chip. The processor engine runs single-threaded because GitHub Pages can't send the headers multi-threading needs. On a host where you control headers, add `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` and it will use more cores automatically.
 
-On other browsers the sheet explains what to use instead. Recipes, tasks, groceries, the planner, and the cookbook work everywhere.
+Recipes, tasks, groceries, the planner, and the cookbook work everywhere.
 
 **Trade-offs to know about:**
 
 - The first download is big. The sheet recommends Wi-Fi.
 - A small model running on a phone or laptop is slower and less clever than a large cloud model. It may occasionally miss an action or get a detail wrong. The Smartest option helps if the device can handle it.
-- It uses the device's graphics memory while running. If a device runs out, the sheet suggests the Lighter option.
+- It uses the device's memory while running. If a device runs out, the sheet steps down to a smaller option.
+- The Phone model (0.5B) is small. It handles chatting, lists, tasks, and reminders well, but its recipes are simpler. Phone+ is noticeably better if the device has the memory.
 
-### Optional: hosted AI (for browsers without WebGPU)
+### Optional: hosted AI
 
-If you, the app owner, also want AI on browsers that can't run it themselves, deploy `backend/cloudflare-worker.js` (see the comments at the top of that file) and put its URL in `config.js → ai.endpoint`. Your model key stays secret on Cloudflare; users never enter anything. When `ai.endpoint` is set, the app uses the hosted AI instead of the in-browser engine and enforces the plan limits (`LIMIT_FREE`, `LIMIT_PLUS`, `LIMIT_PRO`) through a KV namespace bound as `USAGE`.
+If you, the app owner, would rather serve AI from a big cloud model, deploy `backend/cloudflare-worker.js` (see the comments at the top of that file) and put its URL in `config.js → ai.endpoint`. Your model key stays secret on Cloudflare; users never enter anything. When `ai.endpoint` is set, the app uses the hosted AI instead of the in-browser engine and enforces the plan limits (`LIMIT_FREE`, `LIMIT_PLUS`, `LIMIT_PRO`) through a KV namespace bound as `USAGE`.
 
 ---
 
@@ -258,6 +267,10 @@ A plan is only granted by a verified purchase: a Stripe webhook, RevenueCat, or 
 Plans, prices, and features live in `js/plans.js`. The worker enforces limits from the `subscriptions` table, which **only payment webhooks can write**. Nothing the browser does can grant a plan.
 
 ### Web (Stripe)
+
+> **Where does my Stripe key go?** Your Stripe **secret key** (`sk_live_…`, or a restricted `rk_live_…` key) goes into **exactly one place**: the Cloudflare Worker that runs `backend/cloudflare-worker.js`, as an **encrypted secret** named `STRIPE_SECRET_KEY`. Set it in **Cloudflare dashboard → Workers → your worker → Settings → Variables and Secrets → Add → Type: Secret**. The webhook signing secret (`whsec_…`) goes there too, as `STRIPE_WEBHOOK_SECRET`.
+>
+> **Never** put either key in `config.js`, `index.html`, any `js/` file, or anywhere else in this repository. Everything in the repo is public and runs in the browser. `config.js` only holds **public** Payment Link URLs (`https://buy.stripe.com/…`) and the customer-portal link, which are safe to share. The Stripe *publishable* key (`pk_…`) isn't needed at all.
 
 1. In Stripe, create two products: **Grandma+** and **Grandma Pro**. Each gets a monthly price ($7.99 / $14.99) and a yearly price ($76.70 / $143.90).
 2. Create a **Payment Link** for each of the 4 prices. In each link's settings, set the confirmation redirect to `https://your-app/?checkout=success#/pricing`.

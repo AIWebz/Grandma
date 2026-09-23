@@ -365,7 +365,7 @@
           role: "error",
           text:
             e.kind === "offline" ? "Looks like you're offline. I'll be right here when you're back."
-            : e.kind === "brain-unsupported" ? "This browser can't run my brain. Chrome or Edge work best."
+            : e.kind === "brain-unsupported" ? "My brain couldn't start on this device. Let's try the Phone version."
             : e.kind === "brain-load" ? "I couldn't wake up just now. Let's try turning me on again."
             : e.kind === "brain" ? "I got a little muddled there. Let's try that again."
             : "Grandma's having trouble connecting right now. Give it another try in a moment.",

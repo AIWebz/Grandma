@@ -1,11 +1,15 @@
 /*
  * Grandma AI — Grandma's brain, running entirely inside the web page.
  *
- * Uses WebLLM (vendor/web-llm, Apache-2.0) to run an open AI model on the
- * device's graphics chip through WebGPU. Nothing to install and no API key:
- * the browser downloads the model once from Hugging Face, keeps it in its
- * cache, and from then on Grandma works offline and privately — conversations
- * never leave the device.
+ * Two engines, same answers:
+ *  - WebLLM (vendor/web-llm, Apache-2.0) runs the model on the graphics chip
+ *    through WebGPU — fast, for computers and newer phones.
+ *  - wllama (vendor/wllama, MIT — llama.cpp compiled to WebAssembly) runs a
+ *    small model on the processor. It needs nothing special from the browser,
+ *    so it works on every iPhone, iPad, and Android phone.
+ * Nothing to install and no API key: the browser downloads the model once from
+ * Hugging Face, keeps it in its cache, and from then on Grandma works offline
+ * and privately — conversations never leave the device.
  *
  * Small on-device models are best at one clear job at a time, so Grandma
  * answers in a strict JSON shape — { actions: [...], reply: "..." } — that the
@@ -17,29 +21,47 @@
   const GA = window.GA;
   const { U, Store } = GA;
 
+  const HF = "https://huggingface.co";
   const MODELS = [
-    { key: "3b", base: "Qwen2.5-3B-Instruct", label: "Recommended", size: "about 2 GB", note: "The best balance for most laptops and desktops." },
-    { key: "1.5b", base: "Qwen2.5-1.5B-Instruct", label: "Lighter", size: "about 1 GB", note: "For phones, tablets, and older computers." },
-    { key: "7b", base: "Qwen2.5-7B-Instruct", label: "Smartest", size: "about 4.5 GB", note: "Needs a computer with a strong graphics card." },
+    { key: "3b", engine: "gpu", base: "Qwen2.5-3B-Instruct", label: "Recommended", size: "about 2 GB", note: "The best balance for most laptops and desktops." },
+    { key: "1.5b", engine: "gpu", base: "Qwen2.5-1.5B-Instruct", label: "Lighter", size: "about 1 GB", note: "For newer phones, tablets, and older computers." },
+    { key: "7b", engine: "gpu", base: "Qwen2.5-7B-Instruct", label: "Smartest", size: "about 4.5 GB", note: "Needs a computer with a strong graphics card." },
+    // Processor-only models: work on any iPhone, iPad, or Android phone.
+    { key: "phone", engine: "cpu", url: `${HF}/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf`, label: "Phone", size: "about 500 MB", note: "Works on any iPhone, iPad, or Android phone. Quick to download; simpler answers." },
+    { key: "phone-plus", engine: "cpu", url: `${HF}/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf`, label: "Phone+", size: "about 1.1 GB", note: "Smarter, for newer iPhones and iPads and most computers. A little slower." },
   ];
+  const modelFor = (key) => MODELS.find((m) => m.key === key) || MODELS[0];
+  const isMobile = () => /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
   const MAX_OUTPUT = 1100;
-  const HISTORY_CHARS = 4200;
+  // Processor models read more slowly, so they get a shorter conversation.
+  const budget = () => (backend && backend.kind === "cpu" ? { history: 2000, context: 1400, ctx: 4096 } : { history: 4200, context: 2400 });
 
   const cfg = () => ({ model: "3b", ready: false, ...(Store.doc("local").brain || {}) });
   const save = (patch) => Store.setDoc("local", { brain: { ...cfg(), ...patch } });
 
   let libP = null;
+  let cpuLibP = null;
   let gpu = null;
-  let engine = null;
-  let engineId = "";
-  let worker = null;
+  let backend = null; // { kind, id, complete(opts), stop(), unload() }
   let loading = null;
   const status = { state: "idle", progress: 0, text: "" }; // idle | loading | ready | error
   const listeners = new Set();
   const emit = () => listeners.forEach((fn) => { try { fn(status); } catch (e) { /* ignore */ } });
 
-  const lib = () => (libP = libP || import(new URL("vendor/web-llm/index.js", document.baseURI).href));
+  const asset = (path) => new URL(path, document.baseURI).href;
+  const lib = () => (libP = libP || import(asset("vendor/web-llm/index.js")));
+  const cpuLib = () => (cpuLibP = cpuLibP || import(asset("vendor/wllama/index.js")));
+
+  /* A wllama instance that uses only files from this site (no CDN). Safari and
+     older browsers need the "compat" build, which wllama picks automatically. */
+  async function newWllama() {
+    const { Wllama } = await cpuLib();
+    const quiet = { debug() {}, log() {}, warn() {}, error: console.error.bind(console) };
+    const wl = new Wllama({ default: asset("vendor/wllama/wllama.wasm") }, { allowOffline: true, suppressNativeLog: true, logger: quiet });
+    wl.setCompat({ worker: asset("vendor/wllama/compat/wllama.js"), wasm: asset("vendor/wllama/compat/wllama.wasm") });
+    return wl;
+  }
 
   /* ---------------- device support ---------------- */
   async function support() {
@@ -54,58 +76,129 @@
     return gpu;
   }
 
-  async function modelId(key) {
+  /* The model to use, respecting plan perks and what this device can run. */
+  async function pick(key) {
     let k = key || cfg().model;
     if (k === "7b" && !GA.Plans.can("bigBrain")) k = "3b"; // Smartest is a Grandma Pro perk
-    const m = MODELS.find((x) => x.key === k) || MODELS[0];
-    const g = await support();
-    return `${m.base}-${g.f16 ? "q4f16_1" : "q4f32_1"}-MLC`;
+    let m = modelFor(k);
+    if (m.engine === "gpu" && !(await support()).ok) m = modelFor("phone"); // no WebGPU → processor model
+    return m;
+  }
+
+  async function modelId(key) {
+    const m = await pick(key);
+    if (m.engine === "cpu") return m.url;
+    return `${m.base}-${(await support()).f16 ? "q4f16_1" : "q4f32_1"}-MLC`;
   }
 
   async function isDownloaded(key) {
     try {
+      const m = modelFor(key);
+      if (m.engine === "cpu") {
+        const wl = await newWllama();
+        return (await wl.cacheManager.list()).some((e) => e.metadata && e.metadata.originalURL === m.url);
+      }
+      if (!(await support()).ok) return false;
       return await (await lib()).hasModelInCache(await modelId(key));
     } catch (e) {
       return false;
     }
   }
 
+  /* ---- engine: graphics chip (WebLLM + WebGPU) ---- */
+  async function startGPU(id, report) {
+    const webllm = await lib();
+    const worker = new Worker(asset("js/brain-worker.js"), { type: "module" });
+    try {
+      const eng = await webllm.CreateWebWorkerMLCEngine(worker, id, {
+        initProgressCallback: (r) => report(r.progress || 0, friendlyProgress(r.text)),
+      });
+      return {
+        kind: "gpu",
+        id,
+        async complete({ messages, temperature, max_tokens, schema }) {
+          const res = await eng.chat.completions.create({ messages, temperature, max_tokens, response_format: { type: "json_object", schema: JSON.stringify(schema) } });
+          return { text: res.choices[0].message.content || "", finish: res.choices[0].finish_reason };
+        },
+        stop() { try { eng.interruptGenerate(); } catch (e) { /* ignore */ } },
+        async unload() {
+          try { await eng.unload(); } catch (e) { /* ignore */ }
+          worker.terminate();
+        },
+      };
+    } catch (e) {
+      worker.terminate();
+      throw e;
+    }
+  }
+
+  /* ---- engine: processor (wllama, llama.cpp in WebAssembly) — any phone ---- */
+  async function startCPU(m, report) {
+    const wl = await newWllama();
+    let downloaded = false;
+    await wl.loadModelFromUrl(m.url, {
+      n_ctx: 4096,
+      n_gpu_layers: 0,
+      progressCallback: ({ loaded, total }) => {
+        const pct = total ? loaded / total : 0;
+        downloaded = pct >= 1;
+        report(pct * 0.95, downloaded ? "Loading Grandma from this device…" : `Downloading Grandma — ${Math.round(pct * 100)}% (${Math.round(loaded / 1048576)} MB)`);
+      },
+    });
+    let ctl = null;
+    return {
+      kind: "cpu",
+      id: m.url,
+      async complete({ messages, temperature, max_tokens, schema }) {
+        ctl = new AbortController();
+        try {
+          const res = await wl.createChatCompletion({
+            messages,
+            temperature,
+            max_tokens,
+            cache_prompt: true, // reuse the unchanged start of the prompt between turns
+            abortSignal: ctl.signal,
+            response_format: { type: "json_schema", json_schema: { name: "answer", schema } },
+          });
+          return { text: res.choices[0].message.content || "", finish: res.choices[0].finish_reason };
+        } finally {
+          ctl = null;
+        }
+      },
+      stop() { if (ctl) ctl.abort(); },
+      async unload() { try { await wl.exit(); } catch (e) { /* ignore */ } },
+    };
+  }
+
   /* Start (or reuse) the engine. Loads from the browser cache after the first download. */
   async function load(onProgress) {
-    const id = await modelId();
-    if (engine && engineId === id) return engine;
+    const m = await pick();
+    const id = await modelId(m.key);
+    if (backend && backend.id === id) return backend;
     if (loading) return loading;
     loading = (async () => {
-      const g = await support();
-      if (!g.ok) throw new GA.AI.AIError("brain-unsupported", "WebGPU isn't available in this browser.");
-      if (engine) await unload();
+      if (backend) await unload();
       status.state = "loading";
       status.progress = 0;
       status.text = "Waking Grandma up…";
       emit();
+      const report = (progress, text) => {
+        status.progress = progress;
+        status.text = text;
+        emit();
+        onProgress && onProgress({ progress, text });
+      };
       try {
-        const webllm = await lib();
-        worker = new Worker(new URL("js/brain-worker.js", document.baseURI), { type: "module" });
-        engine = await webllm.CreateWebWorkerMLCEngine(worker, id, {
-          initProgressCallback: (r) => {
-            status.progress = r.progress || 0;
-            status.text = r.text || "";
-            emit();
-            onProgress && onProgress(r);
-          },
-        });
-        engineId = id;
+        backend = m.engine === "cpu" ? await startCPU(m, report) : await startGPU(id, report);
         status.state = "ready";
         status.progress = 1;
         emit();
-        return engine;
+        return backend;
       } catch (e) {
+        backend = null;
         status.state = "error";
         status.text = String((e && e.message) || e);
         emit();
-        if (worker) worker.terminate();
-        worker = null;
-        engine = null;
         throw new GA.AI.AIError("brain-load", status.text);
       }
     })();
@@ -117,11 +210,9 @@
   }
 
   async function unload() {
-    try { if (engine) await engine.unload(); } catch (e) { /* ignore */ }
-    if (worker) worker.terminate();
-    engine = null;
-    worker = null;
-    engineId = "";
+    const b = backend;
+    backend = null;
+    if (b) await b.unload();
     status.state = "idle";
     emit();
   }
@@ -214,22 +305,21 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
   /* Write one full recipe with the engine enforcing the recipe shape. */
   async function recipe({ request, prefs, servings }) {
     const eng = await load();
-    const res = await eng.chat.completions.create({
+    const res = await eng.complete({
       messages: [
         { role: "system", content: GA.AI.RECIPE_WRITER + ' Use qty 0 and unit "" for "to taste". Pick one food emoji.' },
         { role: "user", content: `Write a recipe for: ${request}\nServings: ${servings || 4}${prefs ? "\nAbout this cook:\n" + prefs : ""}` },
       ],
       temperature: 0.6,
       max_tokens: 1500,
-      response_format: { type: "json_object", schema: JSON.stringify(RECIPE_SCHEMA) },
+      schema: RECIPE_SCHEMA,
     });
-    return parseJSON(res.choices[0].message.content);
+    return parseJSON(res.text);
   }
 
   const RECIPE_INTENT = /\brecipes?\b|what('?s| is| should i (make|cook)).{0,12}(dinner|lunch|breakfast|supper|dessert)|\b(make|cook|bake)\b.{0,20}\b(dinner|lunch|breakfast|supper|dessert)\b(?!.{0,20}\b(list|plan)\b)|\bi (have|'ve got|got)\b.{0,80}\b(chicken|beef|pork|rice|pasta|eggs?|potato(es)?|beans|fish|salmon|shrimp|tofu|cheese|broccoli|ground|turkey|sausage|noodles|flour|apples?|bananas?)\b/i;
 
-  const responseSchema = (tools) =>
-    JSON.stringify({
+  const responseSchema = (tools) => ({
       type: "object",
       properties: {
         actions: {
@@ -243,12 +333,13 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
         reply: { type: "string" },
       },
       required: ["actions", "reply"],
-    });
+  });
 
   /* Grandma's stored conversation → short chat for a small model. */
   async function toMessages(system, messages, tools) {
     const tone = ((system[0] && system[0].text) || "").match(/Tone for this person:[^\n]*/);
-    const context = ((system[1] && system[1].text) || "").slice(0, 2400);
+    const { history, context: contextChars } = budget();
+    const context = ((system[1] && system[1].text) || "").slice(0, contextChars);
     const sys = [LOCAL_PROMPT, tone ? tone[0] : "", tools.length ? "Actions you can use:\n" + toolDocs(tools) : "Answer with actions: [] this time.", context].filter(Boolean).join("\n\n");
 
     const lastUser = messages.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop();
@@ -285,7 +376,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     // Keep the most recent turns that fit.
     let used = 0;
     let start = out.length;
-    while (start > 0 && used + out[start - 1].content.length < HISTORY_CHARS) used += out[--start].content.length;
+    while (start > 0 && used + out[start - 1].content.length < history) used += out[--start].content.length;
     let recent = out.slice(Math.min(start, out.length - 1));
     while (recent.length && recent[0].role !== "user") recent = recent.slice(1);
     return [{ role: "system", content: sys }, ...recent];
@@ -313,21 +404,21 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     }
     const eng = await load();
     const msgs = await toMessages(system, messages, tools);
-    const onAbort = () => { try { eng.interruptGenerate(); } catch (e) { /* ignore */ } };
+    const onAbort = () => eng.stop();
     if (signal) {
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
       signal.addEventListener("abort", onAbort, { once: true });
     }
     let raw;
     try {
-      const res = await eng.chat.completions.create({
+      const res = await eng.complete({
         messages: msgs,
         temperature: 0.5,
         max_tokens: MAX_OUTPUT,
-        response_format: { type: "json_object", schema: responseSchema(tools.length ? tools : [{ name: "none" }]) },
+        schema: responseSchema(tools.length ? tools : [{ name: "none" }]),
       });
-      raw = res.choices[0].message.content || "";
-      var finish = res.choices[0].finish_reason;
+      raw = res.text;
+      var finish = res.finish;
     } catch (e) {
       if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
       throw new GA.AI.AIError("brain", String((e && e.message) || e));
@@ -373,23 +464,23 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     }
     if (images.length && text.trim().length < 12) return { legible: false, title: "", ingredients: [], instructions: [] };
     const eng = await load();
-    const res = await eng.chat.completions.create({
+    const res = await eng.complete({
       messages: [
         { role: "system", content: system },
         { role: "user", content: `${instruction}\n\nText read from the photo (it may contain reading mistakes; fix obvious ones only):\n${text.slice(0, 5000)}` },
       ],
       temperature: 0.1,
       max_tokens: 1500,
-      response_format: { type: "json_object", schema: JSON.stringify(schema) },
+      schema,
     });
-    const out = parseJSON(res.choices[0].message.content);
+    const out = parseJSON(res.text);
     if (!out) throw new GA.AI.AIError("brain", "Couldn't organize the recipe.");
     return out;
   }
 
   /* ================= "Turn on Grandma" setup ================= */
   function openSetup({ onDone } = {}) {
-    const state = { step: "choose", model: cfg().model === "7b" && !GA.Plans.can("bigBrain") ? "3b" : cfg().model, downloaded: {}, support: null, progress: null, error: "" };
+    const state = { step: "choose", model: cfg().model === "7b" && !GA.Plans.can("bigBrain") ? "3b" : cfg().model, downloaded: {}, support: null, progress: null, error: "", showAll: false };
 
     U.openSheet({
       title: "Turn on Grandma",
@@ -403,11 +494,6 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
             <p class="muted">Nothing to install and no account. Your browser downloads her once, keeps her, and after that she even works offline. Your conversations never leave this device.</p></div></div>`;
           if (!state.support) {
             html += `<div class="setup-card"><p class="muted waiting">${U.icon("refresh", "spin")} Checking this device…</p></div>`;
-          } else if (!state.support.ok) {
-            html += `<div class="setup-card"><p><b>This browser can't run Grandma's brain yet.</b></p>
-              <p class="muted">She needs <b>WebGPU</b>, which is built into recent <b>Chrome</b> and <b>Edge</b> (computers and Android) and <b>Safari</b> on iOS 26 / macOS 26 or newer. Try one of those, or update this browser.</p>
-              <p class="muted small">Everything else — recipes, tasks, groceries, the planner, and the Family Cookbook — works right now.</p>
-              <div class="row wrap"><button class="btn" data-close>OK</button></div></div>`;
           } else if (state.step === "done") {
             html += `<div class="setup-card center">${U.avatar(72)}<h3>Grandma is ready ❤️</h3><p class="muted">She's running right inside this browser. Ask her what's for dinner.</p>
               <button class="btn primary" data-finish>Start chatting</button></div>`;
@@ -418,8 +504,14 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
                 <span class="grow"><b>${m.label}</b> <span class="muted">· ${m.size}</span><small>${m.note}</small></span>${locked ? `<span class="tag-pro">Pro</span>` : state.downloaded[m.key] ? `<span class="tag ok">Downloaded</span>` : ""}</label>`;
             };
             const ready = state.downloaded[state.model];
+            const gpuOk = state.support.ok;
+            const gpuModels = MODELS.filter((m) => m.engine === "gpu");
+            const cpuModels = MODELS.filter((m) => m.engine === "cpu");
+            const list = gpuOk ? (state.showAll || modelFor(state.model).engine === "cpu" ? [...gpuModels, ...cpuModels] : gpuModels) : cpuModels;
             html += `<div class="setup-card"><p><b>Choose Grandma's brain.</b> ${ready ? "It's already on this device." : "It's a one-time download — Wi-Fi is best."}</p>
-              <div class="choices">${MODELS.map(opt).join("")}</div>
+              ${gpuOk ? "" : `<p class="muted small">This device will run Grandma on its processor, so it works on any iPhone, iPad, or Android phone. Replies take a little longer to start than on a computer.</p>`}
+              <div class="choices">${list.map(opt).join("")}</div>
+              ${gpuOk && list.length === gpuModels.length && !state.progress ? `<button class="btn ghost small" data-show-all>Trouble on this device? Show the works-anywhere versions</button>` : ""}
               ${state.progress ? `<div class="progress"><i style="width:${Math.round(state.progress.pct * 100)}%"></i></div><p class="muted small" data-progress-text>${U.esc(state.progress.text)}</p>` : ""}
               ${state.error ? `<p class="form-error">${U.esc(state.error)}</p>` : ""}
               <div class="row wrap">${state.progress ? "" : `<button class="btn primary" data-download>${U.icon(ready ? "sparkle" : "download")}${ready ? "Turn on Grandma" : "Download Grandma"}</button>`}</div>
@@ -437,7 +529,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
             if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
             await unload();
             await load((r) => {
-              state.progress = { pct: r.progress || 0, text: friendlyProgress(r.text) };
+              state.progress = { pct: r.progress || 0, text: r.text };
               const bar = root.querySelector(".progress i");
               const txt = root.querySelector("[data-progress-text]");
               if (bar) bar.style.width = Math.round((r.progress || 0) * 100) + "%";
@@ -448,9 +540,20 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
             state.step = "done";
           } catch (e) {
             state.progress = null;
-            state.error = /memory|OOM|device lost|allocate/i.test(e.message)
-              ? "This device ran out of graphics memory. Try the Lighter option."
-              : `That didn't finish: ${e.message}. Check your internet connection and try again — it picks up where it left off.`;
+            const m = modelFor(state.model);
+            if (/memory|OOM|device lost|allocate|Aborted\(\)|RangeError/i.test(e.message)) {
+              // Too big for this device: step down to something that fits.
+              const smaller = m.key === "7b" ? "3b" : m.key === "3b" ? "1.5b" : m.key === "1.5b" || m.key === "phone-plus" ? "phone" : "";
+              state.error = smaller
+                ? `This device ran out of memory for that one. I picked “${modelFor(smaller).label}” instead — tap the button to try it.`
+                : "This device ran out of memory. Close other apps and tabs, then try again.";
+              if (smaller) {
+                state.model = smaller;
+                state.showAll = true;
+              }
+            } else {
+              state.error = `That didn't finish: ${e.message}. Check your internet connection and try again — it picks up where it left off.`;
+            }
           }
           view();
           GA.App && GA.App.refreshAll();
@@ -458,6 +561,10 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
 
         root.addEventListener("click", (e) => {
           if (e.target.closest("[data-download]")) return start();
+          if (e.target.closest("[data-show-all]")) {
+            state.showAll = true;
+            return view();
+          }
           if (e.target.closest("[data-finish]")) {
             close();
             onDone && onDone();
@@ -473,7 +580,11 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
         view();
         support().then(async (s) => {
           state.support = s;
-          if (s.ok) for (const m of MODELS) state.downloaded[m.key] = await isDownloaded(m.key);
+          const chosen = modelFor(state.model);
+          if (!s.ok && chosen.engine === "gpu") state.model = "phone";
+          else if (s.ok && !cfg().ready && chosen.key === "3b" && isMobile()) state.model = "1.5b"; // phones: start lighter
+          view();
+          for (const m of MODELS) state.downloaded[m.key] = await isDownloaded(m.key);
           view();
         });
       },
@@ -492,8 +603,8 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
 
   /* Warm up in the background so the first message is quick. */
   function preload() {
-    if (!cfg().ready || engine || loading) return;
-    support().then((s) => s.ok && load().catch(() => {}));
+    if (!cfg().ready || backend || loading) return;
+    load().catch(() => {});
   }
 
   GA.Brain = {
@@ -510,16 +621,19 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     recipe,
     ocr,
     openSetup,
+    engine: () => (backend ? backend.kind : ""),
     status: () => status,
     onStatus: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
     async forget() {
       await unload();
       try {
-        const webllm = await lib();
-        for (const m of MODELS) {
-          const id = await modelId(m.key);
-          await webllm.deleteModelAllInfoInCache(id).catch(() => {});
+        if ((await support()).ok) {
+          const webllm = await lib();
+          for (const m of MODELS.filter((x) => x.engine === "gpu")) await webllm.deleteModelAllInfoInCache(await modelId(m.key)).catch(() => {});
         }
+      } catch (e) { /* ignore */ }
+      try {
+        await (await newWllama()).cacheManager.clear();
       } catch (e) { /* ignore */ }
       save({ ready: false });
     },

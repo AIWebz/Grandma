@@ -12,11 +12,13 @@
  */
 window.GRANDMA_CONFIG = {
   ai: {
-    // Grandma's AI runs entirely inside each person's browser (WebLLM on
-    // WebGPU) — no install, no API key, nothing to set here.
+    // Grandma's AI runs entirely inside each person's browser — on the
+    // graphics chip where WebGPU is available, otherwise on the processor, so
+    // it works on iPhones, iPads, Android, and computers. No install, no API
+    // key, nothing to set here.
     //
-    // Optional: to serve AI from a server instead (e.g. for browsers without
-    // WebGPU), deploy backend/cloudflare-worker.js and put its URL here.
+    // Optional: to serve AI from a server instead, deploy
+    // backend/cloudflare-worker.js and put its URL here.
     // Leave "" to use the in-browser AI.
     endpoint: "",
   },

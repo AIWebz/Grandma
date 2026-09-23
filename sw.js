@@ -2,7 +2,7 @@
  * Grandma AI — service worker: offline app shell + notification clicks.
  * Bump VERSION when you deploy changes so returning visitors get them.
  */
-const VERSION = "grandma-v4";
+const VERSION = "grandma-v5";
 const SHELL = [
   "./",
   "index.html",
