@@ -14,7 +14,8 @@
  *   GET  /health             Quick check that the worker is up
  *
  * Secrets (encrypted):
- *   STRIPE_SECRET_KEY       your Stripe secret (SECRET KEY HERE) — web subscriptions.
+ *   STRIPE_SECRET_KEY          your Stripe secret key — web subscriptions. Paste the key itself in the
+ *                              Cloudflare dashboard (Settings → Variables and Secrets), not in this file.
  *                              It goes HERE, as an encrypted secret, never in config.js or the repo.
  *   STRIPE_WEBHOOK_SECRET      the webhook signing secret (whsec_…) for /stripe/webhook
  *   SUPABASE_SERVICE_ROLE_KEY  needed for accounts, plans and webhooks
