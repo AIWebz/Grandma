@@ -16,7 +16,6 @@
  * Secrets (encrypted):
  *   STRIPE_SECRET_KEY          your Stripe secret key — web subscriptions. Paste the key itself in the
  *                              Cloudflare dashboard (Settings → Variables and Secrets), not in this file.
- *                              It goes HERE, as an encrypted secret, never in config.js or the repo.
  *   STRIPE_WEBHOOK_SECRET      the webhook signing secret (whsec_…) for /stripe/webhook
  *   SUPABASE_SERVICE_ROLE_KEY  needed for accounts, plans and webhooks
  *   ANTHROPIC_API_KEY          only if you turn on optional hosted AI (/v1/chat);
