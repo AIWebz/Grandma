@@ -92,6 +92,7 @@
         updateTopbar();
       }
       if (keys.includes("settings") || keys.includes("*")) applyTheme();
+      if (keys.some((k) => ["settings", "subscription", "*"].includes(k))) applyAccent();
     });
   }
 
@@ -343,6 +344,17 @@
     });
   }
 
+  /* Accent colors are a Grandma+ perk; everyone else keeps Grandma's coral. */
+  function applyAccent() {
+    const a = Store.doc("settings").accent;
+    if (a && a !== "coral" && GA.Plans.can("accents")) document.documentElement.dataset.accent = a;
+    else delete document.documentElement.dataset.accent;
+  }
+  function setAccent(a) {
+    Store.setDoc("settings", { accent: a });
+    applyAccent();
+  }
+
   function setTheme(t) {
     Store.setDoc("settings", { theme: t });
     applyTheme();
@@ -508,6 +520,7 @@
   async function boot() {
     await Store.init();
     applyTheme();
+    applyAccent();
     if (Store.doc("local").sidebarCollapsed) U.$("#app").classList.add("sb-collapsed");
     wireGlobal();
     GA.Chat.mount();
@@ -537,6 +550,7 @@
     },
     openAuth,
     setTheme,
+    setAccent,
     askGrandma,
     isDesktop,
   };

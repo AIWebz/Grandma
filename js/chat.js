@@ -109,7 +109,13 @@
       case "note":
         return `<div class="card note">${U.icon(card.icon || "check")}<span class="grow">${U.esc(card.text)}</span>${card.link ? `<button class="btn small ghost" data-route="${card.link.route}">${U.esc(card.link.label)}</button>` : ""}</div>`;
       case "upgrade": {
-        const text = card.reason === "memory" ? "Grandma's memory is full on the Free plan." : card.reason === "recipes" ? `The Free plan saves up to ${GA.Plans.limit("savedRecipes")} recipes.` : "That's part of Grandma+.";
+        const plan = GA.Plans.current().name;
+        const text =
+          card.reason === "memory" ? `Grandma's memory is full on the ${plan} plan.`
+          : card.reason === "recipes" ? `The ${plan} plan saves up to ${GA.Plans.limit("savedRecipes")} recipes.`
+          : card.reason === "recipeGens" ? `That's all the new recipes for today on the ${plan} plan (${GA.Plans.limit("recipeGens")} a day).`
+          : card.reason === "planDays" ? `The ${plan} plan plans ${GA.Plans.limit("planDays")} days ahead. Upgrade for weekly planning.`
+          : "That's part of Grandma+.";
         return `<div class="card note">${U.icon("star")}<span class="grow">${U.esc(text)}</span><button class="btn small" data-route="pricing">See plans</button></div>`;
       }
       default:
@@ -151,7 +157,18 @@
       </div>`;
   }
 
-  function messageHTML(m, i) {
+  /* Labs (Grandma Pro): one-tap follow-ups under Grandma's latest answer. */
+  function suggestions(m) {
+    const types = (m.cards || []).map((c) => c.type);
+    if (types.includes("recipe")) return ["Make it quicker", "Something different", "Plan it for dinner tomorrow"];
+    if (types.includes("grocery")) return ["Add a few breakfast things", "What can I make with these?"];
+    if (types.includes("tasks")) return ["Help me plan my day", "Break it into smaller steps"];
+    if (types.includes("plan")) return ["Add a break for lunch", "What's for dinner?"];
+    return ["What's for dinner?", "Plan my day", "I need some encouragement"];
+  }
+  const labsOn = () => GA.Plans.can("labs") && Boolean((Store.doc("settings").labs || {}).suggest);
+
+  function messageHTML(m, i, all) {
     if (m.role === "user") {
       const imgs = (m.images || []).length ? `<div class="imgs">${m.images.map((id) => `<span class="media-frame"><img data-media-id="${id}" alt="Attached photo"></span>`).join("")}</div>` : "";
       return `<div class="msg user"><div class="bubble">${imgs}${U.esc(m.text || "")}</div></div>`;
@@ -166,6 +183,7 @@
           <button class="icon-btn" data-copy="${i}" aria-label="Copy" title="Copy">${U.icon("copy")}</button>
           ${GA.Voice.canSpeak() ? `<button class="icon-btn" data-speak="${i}" aria-label="Read aloud" title="Read aloud">${U.icon("volume")}</button>` : ""}
         </div>` : ""}
+        ${all && i === all.length - 1 && labsOn() && !busy ? `<div class="suggest">${suggestions(m).map((t) => `<button class="chip" data-prompt="${U.esc(t)}">${U.esc(t)}</button>`).join("")}</div>` : ""}
       </div></div>`;
   }
 
@@ -378,7 +396,7 @@
 
   function maybeSpeak(text) {
     const v = Store.doc("settings").voice;
-    const allowed = GA.Plans.current().voiceReplies;
+    const allowed = GA.Plans.can("voiceReplies");
     if (!(v.replies && allowed && GA.Voice.canSpeak())) {
       lastInputVoice = false;
       return;
@@ -386,7 +404,8 @@
     GA.Voice.speak(text, {
       onEnd: () => {
         // Hands-free conversation: keep listening after Grandma answers a spoken question.
-        if (lastInputVoice && GA.App.currentRoute() === "chat" && !busy) startListening();
+        // (A Grandma Pro perk; it can be turned off in Settings → Voice.)
+        if (lastInputVoice && GA.Plans.can("handsFree") && v.handsFree !== false && GA.App.currentRoute() === "chat" && !busy) startListening();
       },
     });
   }

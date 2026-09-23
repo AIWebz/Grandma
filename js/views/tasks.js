@@ -72,7 +72,10 @@
       <div class="page-inner">
         <div class="page-head">
           <div><h2>Tasks</h2><p>Chores, reminders, and the little things.</p></div>
-          <button class="btn primary" data-ask="My house is a mess. Can you help me get it under control?">${U.icon("sparkle")}Help me get things done</button>
+          <div class="row wrap">
+            <button class="btn ghost" data-routines>${U.icon("refresh")}Routines${GA.Plans.can("routines") ? "" : ` <span class="tag-pro">Pro</span>`}</button>
+            <button class="btn primary" data-ask="My house is a mess. Can you help me get it under control?">${U.icon("sparkle")}Help me get things done</button>
+          </div>
         </div>
         <form class="add-row" id="task-add">
           <input class="input grow" name="title" placeholder="Add a task…" aria-label="New task" autocomplete="off" maxlength="200">
@@ -114,6 +117,7 @@
       if (c) { cat = c.dataset.cat; return render(root); }
       const ed = e.target.closest("[data-edit]");
       if (ed) return editTask(ed.dataset.edit);
+      if (e.target.closest("[data-routines]")) return GA.Plans.gate("routines", "Household routines") && routines();
       if (e.target.closest("[data-clear-completed]")) {
         if (await U.confirm("Clear all completed tasks?", { okLabel: "Clear" })) {
           buckets().completed.forEach((x) => Store.remove(x.shared ? "htasks" : "tasks", x.id));
@@ -192,6 +196,43 @@
     });
   }
 
+  /* ---------- Household routines (Grandma Pro) ---------- */
+  const ROUTINES = [
+    { name: "Daily tidy", emoji: "✨", repeat: "daily", tasks: [["Run the dishwasher", "kitchen"], ["10-minute pick-up", "cleaning"], ["Wipe the kitchen counters", "kitchen"]] },
+    { name: "Weekly reset", emoji: "🏠", repeat: "weekly", tasks: [["Change the bed sheets", "household"], ["Vacuum the floors", "cleaning"], ["Clean the bathrooms", "cleaning"], ["Take out trash & recycling", "household"], ["Wipe down the fridge", "kitchen"]] },
+    { name: "Laundry day", emoji: "🧺", repeat: "weekly", tasks: [["Wash and dry a load", "laundry"], ["Fold and put away", "laundry"], ["Wash the towels", "laundry"]] },
+    { name: "Pet care", emoji: "🐶", repeat: "daily", tasks: [["Feed the pets", "pets"], ["Fresh water bowl", "pets"], ["Walk or play time", "pets"]] },
+    { name: "Yard care", emoji: "🌱", repeat: "weekly", tasks: [["Mow the lawn", "yard"], ["Water the plants", "yard"], ["Pull weeds", "yard"]] },
+    { name: "Monthly home check", emoji: "🔧", repeat: "monthly", tasks: [["Test the smoke detectors", "household"], ["Check the HVAC filter", "household"], ["Clean out the fridge", "kitchen"], ["Run the dishwasher cleaning cycle", "kitchen"]] },
+  ];
+
+  function routines() {
+    U.openSheet({
+      title: "Household routines",
+      wide: true,
+      body: `<p class="muted">Add a routine and its tasks repeat on their own. You can edit or remove any of them later.</p>
+        <div class="routine-grid">${ROUTINES.map((r, i) => `
+          <div class="routine">
+            <div class="routine-head"><span class="routine-emoji">${r.emoji}</span><div><b>${U.esc(r.name)}</b><small>${r.repeat === "daily" ? "Every day" : r.repeat === "weekly" ? "Every week" : "Every month"}</small></div></div>
+            <ul>${r.tasks.map(([t]) => `<li>${U.esc(t)}</li>`).join("")}</ul>
+            <button class="btn small" data-add-routine="${i}">${U.icon("plus")}Add routine</button>
+          </div>`).join("")}</div>
+        <div class="sheet-actions"><button class="btn ghost" data-close data-ask="Help me build a household routine that fits my week. Ask me a couple of questions first.">${U.icon("sparkle")}Build a custom routine with Grandma</button></div>`,
+      onMount(sheet) {
+        sheet.addEventListener("click", (e) => {
+          const b = e.target.closest("[data-add-routine]");
+          if (!b) return;
+          const r = ROUTINES[Number(b.dataset.addRoutine)];
+          const shared = Boolean(Store.doc("household").id);
+          r.tasks.forEach(([title, category]) => GA.TaskOps.create({ title, category, due_date: U.today(), recurrence: r.repeat }, { shared }));
+          b.disabled = true;
+          b.innerHTML = `${U.icon("check")}Added`;
+          U.toast(`${r.name} added${shared ? " for your household" : ""} ❤️`);
+        });
+      },
+    });
+  }
+
   function editTask(id) {
     const found = Store.findTask(id);
     if (!found) return;
@@ -207,7 +248,7 @@
             <label class="field"><span>Due date</span><input class="input" type="date" name="dueDate" value="${U.esc(t.dueDate || "")}"></label>
             <label class="field"><span>Time</span><input class="input" type="time" name="dueTime" value="${U.esc(t.dueTime || "")}"></label>
           </div>
-          <label class="field"><span>Repeat</span><select class="select" name="recurrence">
+          <label class="field"><span>Repeat ${GA.Plans.can("recurring") ? "" : `<button type="button" class="link-btn" data-gate="recurring">— with Grandma+</button>`}</span><select class="select" name="recurrence" ${GA.Plans.can("recurring") ? "" : "disabled"}>
             ${["none", "daily", "weekly", "monthly"].map((r) => `<option value="${r}" ${t.recurrence === r ? "selected" : ""}>${r === "none" ? "Doesn't repeat" : REPEAT[r]}</option>`).join("")}
           </select></label>
           <div class="set-row" style="padding:6px 0;border:0"><div class="l"><b>Remind me</b><small>A friendly notification when it's due</small></div><label class="switch"><input type="checkbox" name="remind" ${t.remind ? "checked" : ""}><span></span></label></div>
@@ -220,6 +261,8 @@
         </form>`,
       onMount(sheet, close) {
         const f = sheet.querySelector("#task-edit");
+        const g = sheet.querySelector("[data-gate]");
+        if (g) g.onclick = () => GA.Plans.gate("recurring", "Repeating tasks");
         f.onsubmit = (e) => {
           e.preventDefault();
           const fd = new FormData(f);
@@ -228,7 +271,7 @@
             category: fd.get("category"),
             dueDate: fd.get("dueDate") || "",
             dueTime: fd.get("dueTime") || "",
-            recurrence: fd.get("recurrence"),
+            recurrence: GA.Plans.can("recurring") ? fd.get("recurrence") || "none" : "none",
             remind: f.remind.checked,
             notes: fd.get("notes") || "",
             spawnedNext: false,

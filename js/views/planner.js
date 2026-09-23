@@ -23,7 +23,11 @@
       <div class="page-inner">
         <div class="page-head">
           <div><h2>${date === today ? "Today" : U.esc(label)}</h2><p>${d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</p></div>
-          <button class="btn primary" data-plan-ai>${U.icon("sparkle")}Plan My Day With Grandma</button>
+          <div class="row wrap">
+            <button class="btn primary" data-plan-ai>${U.icon("sparkle")}Plan My Day With Grandma</button>
+            <button class="btn ghost" data-meal-plan>🍽️ Plan the week's dinners${GA.Plans.can("mealPlan") ? "" : ` <span class="tag-pro">Grandma+</span>`}</button>
+            <button class="btn ghost" data-week-plan>${U.icon("calendar")}Plan my whole week${GA.Plans.can("weekPlan") ? "" : ` <span class="tag-pro">Pro</span>`}</button>
+          </div>
         </div>
         <div class="day-nav">
           <button class="icon-btn" data-day="-1" aria-label="Previous day">${U.icon("chevronLeft")}</button>
@@ -33,7 +37,7 @@
         ${items.length ? `<div class="card planner-card"><ul class="timeline">${items
           .map((p) => `<li class="${p.done ? "done" : ""} ${p.id === nowId ? "now" : ""}" data-plan-edit="${p.id}">
                 <span class="time">${U.friendlyTime(p.time)}</span><span class="dot"></span>
-                <span class="what"><span>${U.esc(p.title)}</span>${p.durationMin ? `<small>${p.durationMin >= 60 ? Math.round((p.durationMin / 60) * 10) / 10 + " hr" : p.durationMin + " min"}</small>` : ""}</span>
+                <span class="what"><span>${U.esc(p.title)}</span>${p.recipeId ? `<small><button class="link-btn" data-route="recipes/${p.recipeId}">View recipe</button></small>` : ""}${p.durationMin ? `<small>${p.durationMin >= 60 ? Math.round((p.durationMin / 60) * 10) / 10 + " hr" : p.durationMin + " min"}</small>` : ""}</span>
                 <input type="checkbox" class="check" data-plan-done="${p.id}" ${p.done ? "checked" : ""} aria-label="Done: ${U.esc(p.title)}">
               </li>`).join("")}</ul></div>`
           : `<div class="empty">${U.avatar(56)}<p>${date === today ? "Nothing planned yet. Want Grandma to sketch out your day?" : "Nothing planned for this day yet."}</p></div>`}
@@ -64,6 +68,19 @@
         GA.App.askGrandma(itemsFor(date).length ? `Can you help me rearrange my plan for ${when}?` : `Plan my day for ${when}.`);
         return;
       }
+      if (e.target.closest("[data-meal-plan]")) {
+        if (!GA.Plans.gate("mealPlan", "Weekly meal planning")) return;
+        const offerList = () => U.toast("Your week of dinners is planned ❤️", { ms: 6000, action: { label: "Make grocery list", run: () => { const n = GA.Planner.groceryFromPlan(); U.toast(`Added ${n} items to your grocery list`); } } });
+        const res = mealPlan(7, offerList);
+        if (!res.planned && !res.writing) return U.toast("I couldn't find dinners that fit your preferences. Turn on Grandma's AI or save a few recipes first.");
+        if (!res.writing) offerList();
+        return render(root);
+      }
+      if (e.target.closest("[data-week-plan]")) {
+        if (!GA.Plans.gate("weekPlan", "Whole-week planning")) return;
+        GA.App.askGrandma(`Plan my whole week, starting today (${U.today()}). Use plan_day once for each of the next 7 days with a simple, realistic schedule: meals, chores spread across the week, and some rest. Keep what's already planned.`);
+        return;
+      }
       if (e.target.closest("[data-plan-done]")) return;
       const ed = e.target.closest("[data-plan-edit]");
       if (ed) edit(ed.dataset.planEdit);
@@ -74,6 +91,87 @@
     };
     GA.Ads.banner(U.$("[data-ad]", root), "planner");
   }
+
+  /*
+   * Grandma+ meal planning: seven dinners picked from saved recipes and
+   * Grandma's classics, respecting allergies, dislikes, and diet, with no
+   * repeats. Each is linked to its recipe so the grocery list can be built.
+   */
+  const MEAT = /\b(beef|chicken|pork|turkey|sausage|bacon|ham|steak|lamb|shrimp|fish|salmon|tuna|meat|brisket|chorizo)\b/i;
+  const DINNER = ["Dinner", "Comfort Food", "Italian", "Mexican"];
+  const NOT_DINNER = ["Desserts", "Breakfast", "Baking"];
+
+  function mealRules() {
+    const c = Store.doc("settings").cooking || {};
+    const avoid = [c.allergies, c.avoid].join(",").toLowerCase().split(/[,;]+/).map((w) => w.trim()).filter((w) => w.length > 2);
+    Store.list("memory").filter((m) => m.category === "dislikes").forEach((m) => {
+      const w = m.fact.toLowerCase().replace(/^(doesn'?t|does not|don'?t) (like|eat)\s+/, "").replace(/[.]/g, "").trim();
+      if (w.length > 2) avoid.push(w.replace(/s$/, ""));
+    });
+    return { avoid, veg: /vegetarian|vegan/i.test(c.diet || ""), diet: c.diet || "" };
+  }
+
+  function fits(r, rules) {
+    const cats = r.categories || [];
+    const isDinner = cats.some((x) => DINNER.includes(x)) && !(cats.some((x) => NOT_DINNER.includes(x)) && !cats.includes("Dinner"));
+    if (!isDinner && !(r.source === "ai" && GA.Kitchen.isSaved(r.id))) return false;
+    if (r.ingredients.some((i) => rules.avoid.some((w) => i.item.toLowerCase().includes(w)))) return false;
+    if (rules.veg && r.ingredients.some((i) => i.section === "meat" || MEAT.test(i.item))) return false;
+    return true;
+  }
+
+  function planDinner(day, r) {
+    Store.list("plan").filter((p) => p.date === day && p.mealPlan).forEach((p) => Store.remove("plan", p.id));
+    Store.add("plan", { date: day, time: "18:00", title: `Dinner: ${r.name}`, durationMin: (r.prepMinutes || 0) + (r.cookMinutes || 0), recipeId: r.id, mealPlan: true, done: false });
+  }
+
+  /*
+   * Grandma+ meal planning: a week of different dinners from saved recipes and
+   * Grandma's classics that fit allergies, dislikes, and diet. If there aren't
+   * enough, Grandma writes new ones (when her AI is on).
+   */
+  function mealPlan(days, onDone) {
+    const rules = mealRules();
+    const pool = GA.Kitchen.all().filter((r) => fits(r, rules));
+    const saved = pool.filter((r) => GA.Kitchen.isSaved(r.id)).sort(() => Math.random() - 0.5);
+    const picks = saved.concat(pool.filter((r) => !GA.Kitchen.isSaved(r.id)).sort(() => Math.random() - 0.5)).slice(0, days);
+    picks.forEach((r, i) => planDinner(U.addDays(U.today(), i), r));
+    const missing = days - picks.length;
+    if (missing > 0 && GA.AI.connected()) {
+      fillWithNewRecipes(picks.length, missing, rules, picks.map((r) => r.name)).then(onDone);
+      return { planned: picks.length, writing: missing };
+    }
+    if (missing > 0 && picks.length) {
+      // No AI: repeat favorites, but never on back-to-back nights.
+      for (let i = picks.length; i < days; i++) planDinner(U.addDays(U.today(), i), picks[(i + 1) % picks.length]);
+    }
+    return { planned: picks.length ? days : 0, writing: 0 };
+  }
+
+  async function fillWithNewRecipes(start, count, rules, avoidNames) {
+    for (let k = 0; k < count && GA.Plans.recipeGensLeft() > 0; k++) {
+      U.toast(`Grandma is writing dinner ${k + 1} of ${count}…`, { ms: 2500 });
+      try {
+        const r = await GA.AI.generateRecipe({ request: `a ${rules.diet ? rules.diet.toLowerCase() + " " : ""}weeknight dinner, different from: ${avoidNames.join(", ")}` });
+        const rec = Store.add("recipes", { ...r, baseServings: r.servings, saved: false, source: "ai" });
+        GA.Plans.recordRecipeGen();
+        avoidNames.push(r.name);
+        planDinner(U.addDays(U.today(), start + k), rec);
+      } catch (e) {
+        break;
+      }
+    }
+  }
+
+  /* Grandma+ automatic grocery list from the next week's planned recipes. */
+  function groceryFromPlan(days = 7) {
+    const end = U.addDays(U.today(), days - 1);
+    const ids = [...new Set(Store.list("plan").filter((p) => p.recipeId && p.date >= U.today() && p.date <= end).map((p) => p.recipeId))];
+    let n = 0;
+    ids.forEach((id) => (n += GA.Kitchen.addToGrocery(id).length));
+    return n;
+  }
+  GA.Planner = { mealPlan, groceryFromPlan };
 
   function nextSlot(items) {
     const last = items[items.length - 1];

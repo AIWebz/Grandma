@@ -34,6 +34,9 @@ window.GRANDMA_CONFIG = {
     // window.GrandmaNative (App Store / Google Play in-app purchases),
     // or "none" to hide purchase buttons.
     provider: "stripe",
+    // Owner testing only: plan buttons switch plans instantly with no payment,
+    // so you can try every paid feature. MUST be false in production.
+    demoMode: false,
     stripe: {
       // Stripe Payment Links (Dashboard → Payment Links). The app appends
       // ?client_reference_id=<user id> so the webhook knows who paid.

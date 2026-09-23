@@ -77,7 +77,7 @@
     pickVoice() {
       const s = Store.doc("settings").voice;
       const all = Voice.voices();
-      if (s.voiceURI) {
+      if (s.voiceURI && GA.Plans.can("voicePick")) {
         const chosen = all.find((v) => v.voiceURI === s.voiceURI);
         if (chosen) return chosen;
       }
@@ -101,7 +101,7 @@
       const u = new SpeechSynthesisUtterance(t);
       const v = Voice.pickVoice();
       if (v) u.voice = v;
-      u.rate = Store.doc("settings").voice.rate || 1;
+      u.rate = GA.Plans.can("voicePick") ? Store.doc("settings").voice.rate || 1 : 1;
       u.pitch = 1;
       u.onend = () => onEnd && onEnd();
       u.onerror = () => onEnd && onEnd();

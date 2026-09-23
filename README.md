@@ -227,6 +227,34 @@ Before launch, complete Google's consent requirements (UMP / GDPR messages) and 
 
 ## 6. Configure subscriptions
 
+### What each plan unlocks
+
+Every benefit on the pricing page is enforced in the app. Limits and perks are defined in one place, `js/plans.js` (`limits` and `perks`), and the **Compare plans in detail** table on the pricing page is generated from those same values.
+
+| | Free | Grandma+ | Pro |
+| --- | --- | --- | --- |
+| AI messages per day | 25 | 150 | 600 |
+| New recipes Grandma writes per day | 3 | 25 | Unlimited |
+| Things Grandma remembers | 15 | 150 | Unlimited |
+| Saved recipes | 10 | Unlimited | Unlimited |
+| Planning horizon | 2 days | 3 days | 31 days |
+| Ads | Yes | No | No |
+| Personalized recipes (diet, dislikes, household size, skill, cuisines) | Allergies only | ✓ | ✓ |
+| One-tap weekly dinner plan (Planner) | — | ✓ | ✓ |
+| Grocery list built from the meal plan | — | ✓ | ✓ |
+| Repeating tasks | — | ✓ | ✓ |
+| Grandma reads replies aloud | — | ✓ | ✓ |
+| Accent colors | — | ✓ | ✓ |
+| "Plan my whole week" | — | — | ✓ |
+| Household routines (daily tidy, weekly reset, laundry, pets, yard, monthly check) | — | — | ✓ |
+| Hands-free voice conversation + choosing Grandma's voice and speed | — | — | ✓ |
+| Household sharing: tasks, grocery list, Family Cookbook (needs Supabase) | — | — | ✓ |
+| Smartest in-browser brain (7B) | — | — | ✓ |
+| Labs (suggested replies and other experiments) | — | — | ✓ |
+
+A plan is only granted by a verified purchase: a Stripe webhook, RevenueCat, or the native store bridge. To try every paid feature before billing is set up, set `billing.demoMode: true` in `config.js`. The plan buttons then switch plans instantly with no payment, and the pricing page says demo mode is on. **Turn demo mode off before launch.**
+
+
 Plans, prices, and features live in `js/plans.js`. The worker enforces limits from the `subscriptions` table, which **only payment webhooks can write**. Nothing the browser does can grant a plan.
 
 ### Web (Stripe)

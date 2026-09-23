@@ -13,6 +13,11 @@
     return ((parts[0] || "")[0] + ((parts[1] || "")[0] || "")).toUpperCase() || "?";
   };
 
+  const ACCENTS = { coral: "#e0674f", rose: "#d9577f", plum: "#8e5bb5", ocean: "#2f7fb5", sage: "#4f8a5b", honey: "#c98a1b" };
+  const lock = (perk, what) => {
+    const p = GA.Plans.planFor(perk);
+    return `<button class="btn small lock-btn" data-gate="${perk}" data-gate-what="${U.esc(what)}">${U.icon("lock")}${U.esc(p.name)}</button>`;
+  };
   const sw = (name, checked, attrs = "") => `<label class="switch"><input type="checkbox" data-set="${name}" ${checked ? "checked" : ""} ${attrs}><span></span></label>`;
 
   /* ================= Settings ================= */
@@ -29,6 +34,7 @@
     const perm = GA.Notify.permission();
     const aiMode = GA.AI.mode();
     const brain = GA.Brain.cfg();
+    const cook = s.cooking || {};
 
     return `
       <div class="page-inner">
@@ -61,20 +67,40 @@
           <div class="tone-grid">${Object.entries(GA.AI.TONES).map(([k, t]) => `<button class="tone ${p.personality === k ? "on" : ""}" data-tone="${k}" aria-pressed="${p.personality === k}"><b>${U.esc(t.label)}</b><small>${U.esc(t.blurb)}</small></button>`).join("")}</div>
         </div>
 
+        <div class="section-title" id="set-cooking">Cooking</div>
+        <div class="settings-group">
+          <div class="set-row"><div class="l"><b>Allergies</b><small>Grandma never uses these in any recipe</small></div><input class="input" data-cook="allergies" value="${U.esc(cook.allergies || "")}" placeholder="e.g. peanuts, shellfish" maxlength="120" style="max-width:220px"></div>
+          ${GA.Plans.can("cookingPrefs") ? `
+          <div class="set-row"><div class="l"><b>Foods you don't like</b></div><input class="input" data-cook="avoid" value="${U.esc(cook.avoid || "")}" placeholder="e.g. onions, cilantro" maxlength="120" style="max-width:220px"></div>
+          <div class="set-row"><div class="l"><b>Diet</b></div><select class="select" data-cook="diet">${["", "Vegetarian", "Vegan", "Pescatarian", "Gluten-free", "Dairy-free", "Low-carb", "Heart-healthy", "Diabetic-friendly"].map((d) => `<option value="${d}" ${cook.diet === d ? "selected" : ""}>${d || "No preference"}</option>`).join("")}</select></div>
+          <div class="set-row"><div class="l"><b>Cooking for</b></div><select class="select" data-cook="servings">${[1, 2, 3, 4, 5, 6, 8, 10].map((n) => `<option value="${n}" ${Number(cook.servings || 4) === n ? "selected" : ""}>${n} ${n === 1 ? "person" : "people"}</option>`).join("")}</select></div>
+          <div class="set-row"><div class="l"><b>Skill level</b></div><select class="select" data-cook="skill">${["", "Beginner", "Comfortable", "Confident"].map((d) => `<option value="${d}" ${cook.skill === d ? "selected" : ""}>${d || "No preference"}</option>`).join("")}</select></div>
+          <div class="set-row"><div class="l"><b>Favorite cuisines</b></div><input class="input" data-cook="cuisines" value="${U.esc(cook.cuisines || "")}" placeholder="e.g. Italian, Southern" maxlength="120" style="max-width:220px"></div>`
+          : `<div class="set-row"><div class="l"><b>Personalized recipes</b><small>Diet, household size, skill, dislikes, and favorite cuisines — applied to every recipe Grandma writes.</small></div>${lock("cookingPrefs", "Personalized recipes")}</div>`}
+        </div>
+
         <div class="section-title" id="set-voice">Voice</div>
         <div class="settings-group">
           <div class="set-row"><div class="l"><b>Speak to Grandma</b><small>${GA.Voice.canListen() ? "Use the microphone button to talk" : "Not supported in this browser"}</small></div>${sw("voice.input", s.voice.input, GA.Voice.canListen() ? "" : "disabled")}</div>
-          <div class="set-row"><div class="l"><b>Hear Grandma respond</b><small>${plan.voiceReplies ? "Grandma reads her replies aloud" : "Voice conversations come with Grandma+"}</small></div>
-            ${plan.voiceReplies ? sw("voice.replies", s.voice.replies, GA.Voice.canSpeak() ? "" : "disabled") : `<button class="btn small" data-route="pricing">${U.icon("lock")}Grandma+</button>`}</div>
-          ${GA.Voice.canSpeak() ? `<div class="set-row"><div class="l"><b>Voice</b></div>
-            <select class="select" data-voice-select><option value="">Automatic</option>${voices.map((v) => `<option value="${U.esc(v.voiceURI)}" ${s.voice.voiceURI === v.voiceURI ? "selected" : ""}>${U.esc(v.name)}</option>`).join("")}</select></div>
-          <div class="set-row"><div class="l"><b>Speaking speed</b></div><input type="range" min="0.7" max="1.3" step="0.05" value="${s.voice.rate}" data-voice-rate aria-label="Speaking speed" style="accent-color:var(--accent)"><button class="btn small ghost" data-voice-test>${U.icon("volume")}Test</button></div>` : ""}
+          <div class="set-row"><div class="l"><b>Hear Grandma respond</b><small>Grandma reads her replies aloud</small></div>
+            ${plan.voiceReplies ? sw("voice.replies", s.voice.replies, GA.Voice.canSpeak() ? "" : "disabled") : lock("voiceReplies", "Voice conversations")}</div>
+          <div class="set-row"><div class="l"><b>Hands-free conversation</b><small>After Grandma answers a spoken question, she listens for your next one</small></div>
+            ${GA.Plans.can("handsFree") ? sw("voice.handsFree", s.voice.handsFree !== false, GA.Voice.canListen() ? "" : "disabled") : lock("handsFree", "Hands-free conversation")}</div>
+          ${GA.Voice.canSpeak() ? (GA.Plans.can("voicePick")
+            ? `<div class="set-row"><div class="l"><b>Grandma's voice</b></div>
+                 <select class="select" data-voice-select><option value="">Automatic</option>${voices.map((v) => `<option value="${U.esc(v.voiceURI)}" ${s.voice.voiceURI === v.voiceURI ? "selected" : ""}>${U.esc(v.name)}</option>`).join("")}</select></div>
+               <div class="set-row"><div class="l"><b>Speaking speed</b></div><input type="range" min="0.7" max="1.3" step="0.05" value="${s.voice.rate}" data-voice-rate aria-label="Speaking speed" style="accent-color:var(--accent)"><button class="btn small ghost" data-voice-test>${U.icon("volume")}Test</button></div>`
+            : `<div class="set-row"><div class="l"><b>Choose Grandma's voice & speed</b></div>${lock("voicePick", "Choosing Grandma's voice")}</div>`) : ""}
         </div>
 
         <div class="section-title" id="set-appearance">Appearance</div>
         <div class="settings-group">
           <div class="set-row"><div class="l"><b>Theme</b></div>
             <div class="segmented" role="radiogroup">${["system", "light", "dark"].map((t) => `<button class="${s.theme === t ? "on" : ""}" data-theme-set="${t}" role="radio" aria-checked="${s.theme === t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</div></div>
+          <div class="set-row"><div class="l"><b>Accent color</b></div>
+            ${GA.Plans.can("accents")
+              ? `<div class="swatches" role="radiogroup">${Object.entries(ACCENTS).map(([k, c]) => `<button class="swatch ${(s.accent || "coral") === k ? "on" : ""}" data-accent="${k}" style="--sw:${c}" role="radio" aria-checked="${(s.accent || "coral") === k}" aria-label="${k}"></button>`).join("")}</div>`
+              : lock("accents", "Accent colors")}</div>
         </div>
 
         <div class="section-title" id="set-memory">Memory <span class="count">${mem.length}${memLimit === Infinity ? "" : " / " + memLimit}</span></div>
@@ -101,6 +127,14 @@
           <div class="set-row"><div class="l"><b>Current plan</b><small>${U.esc(plan.name)}${Store.doc("subscription").period ? " · " + U.esc(Store.doc("subscription").period) : ""}</small></div><button class="btn small" data-route="pricing">See plans</button></div>
           ${plan.id !== "free" ? `<button class="set-row link" data-manage><div class="l"><b>Manage subscription</b></div>${U.icon("chevronRight")}</button>` : ""}
           <button class="set-row link" data-restore><div class="l"><b>Restore purchases</b></div>${U.icon("refresh")}</button>
+        </div>
+
+        <div class="section-title" id="set-labs">Labs <span class="count">Early access</span></div>
+        <div class="settings-group">
+          ${GA.Plans.can("labs")
+            ? `<div class="set-row"><div class="l"><b>Suggested replies</b><small>One-tap follow-ups under Grandma's answers</small></div>${sw("labs.suggest", Boolean((s.labs || {}).suggest))}</div>
+               <div class="set-row"><div class="l"><b>Smartest brain</b><small>Priority access to Grandma's biggest in-browser model</small></div><button class="btn small" data-brain-setup>Choose</button></div>`
+            : `<div class="set-row"><div class="l"><b>Early access to new features</b><small>Try experimental features and Grandma's newest AI first.</small></div>${lock("labs", "Labs")}</div>`}
         </div>
 
         <div class="section-title" id="set-household">Household</div>
@@ -151,6 +185,10 @@
         U.toast(`Grandma will be ${GA.AI.TONES[t.dataset.tone].label.toLowerCase()}.`);
         return;
       }
+      const gt = e.target.closest("[data-gate]");
+      if (gt) return GA.Plans.gate(gt.dataset.gate, gt.dataset.gateWhat);
+      const ac = e.target.closest("[data-accent]");
+      if (ac) return GA.App.setAccent(ac.dataset.accent);
       const th = e.target.closest("[data-theme-set]");
       if (th) return GA.App.setTheme(th.dataset.themeSet);
       if (e.target.closest("[data-voice-test]")) return GA.Voice.speak("Hi there. This is how I'll sound when I read my replies to you.");
@@ -245,6 +283,8 @@
       if (vs) return setPath("voice.voiceURI", vs.value);
       const vr = e.target.closest("[data-voice-rate]");
       if (vr) return setPath("voice.rate", Number(vr.value));
+      const ck = e.target.closest("[data-cook]");
+      if (ck) return Store.setDoc("settings", { cooking: { [ck.dataset.cook]: ck.dataset.cook === "servings" ? Number(ck.value) : ck.value.trim() } });
       const pn = e.target.closest("[data-profile]");
       if (pn) Store.setDoc("profile", { [pn.dataset.profile]: pn.value.trim() });
     };
@@ -390,6 +430,7 @@
         <div class="pricing-head">
           <h2>Choose your Grandma</h2>
           <p>Start free. Upgrade when you want Grandma to do more.</p>
+          ${GA.Plans.demo() ? `<p class="demo-note">Demo mode is on — plan buttons switch instantly, with no payment.</p>` : ""}
         </div>
         <div class="billing-toggle">
           <div class="segmented" role="radiogroup" aria-label="Billing period">
@@ -409,12 +450,50 @@
               <ul>${plan.features.map((f) => `<li>${U.icon("check")}<span>${U.esc(f)}</span></li>`).join("")}</ul>
             </div>`).join("")}
         </div>
+        ${compareHTML()}
         <div class="pricing-foot">
           <button class="btn ghost" data-restore>${U.icon("refresh")}Restore Purchases</button>
           <div class="links"><a href="${U.esc(CFG.legal.termsUrl)}" target="_blank" rel="noopener">Terms of Service</a><a href="${U.esc(CFG.legal.privacyUrl)}" target="_blank" rel="noopener">Privacy Policy</a></div>
           <p class="fine">Prices in US dollars. Subscriptions renew automatically at the same price and period until cancelled; cancel anytime before renewal and you keep access until the end of the paid period. Yearly plans include the same features as monthly plans. Taxes may apply. Purchases in the iOS or Android app are billed by Apple or Google.</p>
         </div>
       </div>`;
+  }
+
+  /* Exactly what each plan unlocks, generated from the same limits the app enforces. */
+  function compareHTML() {
+    const P = GA.Plans.PLANS;
+    const n = (v, unit) => (v === Infinity ? "Unlimited" : `${v}${unit ? " " + unit : ""}`);
+    const yes = `<span class="yes">${U.icon("check")}</span>`;
+    const no = `<span class="no">—</span>`;
+    const has = (perk) => [P.free, P.plus, P.pro].map((p) => (p.perks[perk] ? yes : no));
+    const rows = [
+      ["AI messages per day", [P.free, P.plus, P.pro].map((p) => n(p.limits.dailyMessages))],
+      ["New recipes per day", [P.free, P.plus, P.pro].map((p) => n(p.limits.recipeGens))],
+      ["Things Grandma remembers", [P.free, P.plus, P.pro].map((p) => n(p.limits.memory))],
+      ["Saved recipes", [P.free, P.plus, P.pro].map((p) => n(p.limits.savedRecipes))],
+      ["Plan ahead", [P.free, P.plus, P.pro].map((p) => n(p.limits.planDays, "days"))],
+      ["Advertisements", [yes, no, no]],
+      ["Personalized recipes (diet, skill, household)", has("cookingPrefs")],
+      ["Weekly dinner plans", has("mealPlan")],
+      ["Grocery list from your meal plan", has("autoGrocery")],
+      ["Repeating tasks", has("recurring")],
+      ["Grandma reads replies aloud", has("voiceReplies")],
+      ["Accent colors", has("accents")],
+      ["Whole-week planning", has("weekPlan")],
+      ["Household routines", has("routines")],
+      ["Hands-free voice & voice choice", has("handsFree")],
+      ["Household sharing (tasks, groceries, cookbook)", [no, no, yes]],
+      ["Smartest in-browser brain", has("bigBrain")],
+      ["Labs: experimental features", has("labs")],
+    ];
+    return `
+      <details class="compare">
+        <summary>Compare plans in detail</summary>
+        <div class="compare-scroll"><table>
+          <thead><tr><th></th><th>Free</th><th>Grandma+</th><th>Pro</th></tr></thead>
+          <tbody>${rows.map(([label, cells]) => `<tr><th scope="row">${U.esc(label)}</th>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody>
+        </table></div>
+      </details>`;
   }
 
   function wirePricing(root) {

@@ -20,7 +20,8 @@
       monthly: 0,
       tagline: "For users trying Grandma AI.",
       cta: "Get Started",
-      limits: { dailyMessages: 25, memory: 15, savedRecipes: 10 },
+      limits: { dailyMessages: 25, memory: 15, savedRecipes: 10, recipeGens: 3, planDays: 2 },
+      perks: {},
       voiceReplies: false,
       ads: true,
       household: false,
@@ -42,7 +43,8 @@
       tagline: "For people who want Grandma as part of their everyday routine.",
       cta: "Start Grandma+",
       badge: "MOST POPULAR",
-      limits: { dailyMessages: 150, memory: 150, savedRecipes: Infinity },
+      limits: { dailyMessages: 150, memory: 150, savedRecipes: Infinity, recipeGens: 25, planDays: 3 },
+      perks: { voiceReplies: true, cookingPrefs: true, mealPlan: true, recurring: true, autoGrocery: true, accents: true },
       voiceReplies: true,
       ads: false,
       household: false,
@@ -66,7 +68,8 @@
       monthly: 14.99,
       tagline: "For power users and families who want the full Grandma AI experience.",
       cta: "Start Grandma Pro",
-      limits: { dailyMessages: 600, memory: Infinity, savedRecipes: Infinity },
+      limits: { dailyMessages: 600, memory: Infinity, savedRecipes: Infinity, recipeGens: Infinity, planDays: 31 },
+      perks: { voiceReplies: true, cookingPrefs: true, mealPlan: true, recurring: true, autoGrocery: true, accents: true, weekPlan: true, routines: true, handsFree: true, voicePick: true, labs: true, bigBrain: true },
       voiceReplies: true,
       ads: false,
       household: true,
@@ -115,6 +118,40 @@
     limit(name) {
       return Plans.current().limits[name];
     },
+    /* Is a paid feature included in the current plan? */
+    can(perk) {
+      return Boolean(Plans.current().perks[perk]);
+    },
+    /* Cheapest plan that includes a perk (for "Included with …" labels). */
+    planFor(perk) {
+      return PLANS.plus.perks[perk] ? PLANS.plus : PLANS.pro;
+    },
+    /* Returns true if allowed; otherwise explains the upgrade and returns false. */
+    gate(perk, what) {
+      if (Plans.can(perk)) return true;
+      const p = Plans.planFor(perk);
+      U.openSheet({
+        title: `${what} is part of ${p.name}`,
+        body: `<div class="upsell">${U.avatar(56)}
+            <p>${U.esc(what)} comes with <b>${U.esc(p.name)}</b>${p.id === "plus" ? " and Grandma Pro" : ""}.</p>
+            <p class="muted">${U.esc(p.tagline)}</p>
+            <div class="sheet-actions"><button class="btn ghost" data-close>Not now</button><button class="btn primary" data-close data-route="pricing">See plans</button></div>
+          </div>`,
+      });
+      return false;
+    },
+
+    /* Recipe generations per day (Free 3, Grandma+ 25, Pro unlimited). */
+    recipeGensLeft() {
+      const g = Store.doc("local").recipeGens || {};
+      const used = g.date === U.today() ? g.count : 0;
+      return Math.max(0, Plans.limit("recipeGens") - used);
+    },
+    recordRecipeGen() {
+      const g = Store.doc("local").recipeGens || {};
+      const count = (g.date === U.today() ? g.count : 0) + 1;
+      Store.setDoc("local", { recipeGens: { date: U.today(), count } });
+    },
 
     /* Local, soft usage counter so the UI can warn before the proxy refuses. */
     usage() {
@@ -127,14 +164,11 @@
       return b.date === U.today() ? b.count || 0 : 0;
     },
     remainingMessages() {
-      // Local AI runs on the person's own computer, so there's nothing to meter.
-      if (GA.AI && GA.AI.mode() === "local") return Infinity;
       return Math.max(0, Plans.limit("dailyMessages") + Plans.bonus() - Plans.usage());
     },
     recordMessage() {
-      // The proxy reports the authoritative count itself (see syncRemaining),
-      // and on-device AI isn't metered at all.
-      if (GA.AI && ["proxy", "local"].includes(GA.AI.mode())) return;
+      // The proxy reports the authoritative count itself (see syncRemaining).
+      if (GA.AI && GA.AI.mode() === "proxy") return;
       const today = U.today();
       const u = Store.doc("local").usage || {};
       const count = u.date === today ? u.count + 1 : 1;
@@ -153,9 +187,17 @@
       return (CFG.billing && CFG.billing.provider) || "none";
     },
 
+    demo: () => Boolean(CFG.billing && CFG.billing.demoMode),
+
     async purchase(planId, period) {
       const key = `${planId}_${period}`;
       const provider = Plans.provider();
+      // Owner testing only (config.js → billing.demoMode). Never enable in production.
+      if (Plans.demo()) {
+        Store.setDoc("subscription", { plan: planId, status: "active", period, renewsAt: null, source: "demo" });
+        U.toast(`Demo mode: you're now on ${PLANS[planId].name}. No charge.`);
+        return;
+      }
       if (provider === "native") {
         const productId = (CFG.billing.nativeProducts || {})[key];
         try {
@@ -209,6 +251,11 @@
     },
 
     manage() {
+      if (Plans.demo()) {
+        Store.setDoc("subscription", { plan: "free", status: "active", period: "", renewsAt: null, source: "demo" });
+        U.toast("Demo mode: back on the Free plan.");
+        return;
+      }
       if (Plans.provider() === "native" && window.GrandmaNative.manageSubscriptions) {
         window.GrandmaNative.manageSubscriptions();
         return;

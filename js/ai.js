@@ -14,6 +14,7 @@
   const { U, Store } = GA;
   const CFG = (window.GRANDMA_CONFIG || {}).ai || {};
 
+  const RECIPE_WRITER = "You are Grandma, a wonderful home cook. Write one complete, reliable home recipe: real US measurements for every ingredient, safe cooking temperatures and times, 4-10 clear steps, and one or two short tips in a warm grandmotherly voice. Respect every allergy and dislike you're told about — never include those foods.";
   const TRANSCRIBER = "You are Grandma AI's careful recipe transcriber. Preserve the family's original wording, amounts, and quirks; don't modernize or 'correct' the recipe. If something is illegible, write [unclear] rather than guessing.";
   const MAX_TOOL_ROUNDS = 6;
   const HISTORY_LIMIT = 40;
@@ -243,6 +244,7 @@ Honesty and safety (these never change, whatever tone is selected):
                 time: { type: "string", description: "HH:MM, 24-hour" },
                 title: { type: "string" },
                 duration_minutes: { type: "integer", minimum: 5 },
+                recipe_id: { type: "string", description: "Optional: link a recipe (e.g. for a planned dinner)." },
               },
               required: ["time", "title"],
             },
@@ -355,6 +357,7 @@ Honesty and safety (these never change, whatever tone is selected):
   const AI = {
     TONES,
     TOOLS,
+    RECIPE_WRITER,
     AIError,
 
     /*
@@ -462,6 +465,36 @@ Honesty and safety (these never change, whatever tone is selected):
         throw e;
       }
       return { text: texts.join("\n\n"), cards };
+    },
+
+    /*
+     * Write one complete recipe for a request like "chicken, rice and broccoli,
+     * 30 minutes". Returns a clean recipe object (see Kitchen.normalize).
+     */
+    async generateRecipe({ request, servings }) {
+      if (!AI.connected()) throw new AIError("config", "Grandma's AI isn't turned on yet.");
+      const prefs = GA.Kitchen.prefs();
+      const serves = servings || GA.Kitchen.defaultServings();
+      let raw;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (AI.mode() === "local") {
+          raw = await GA.Brain.recipe({ request, prefs, servings: serves });
+        } else {
+          const tool = TOOLS.find((t) => t.name === "create_recipe");
+          const resp = await AI.request({
+            system: [{ type: "text", text: RECIPE_WRITER }],
+            messages: [{ role: "user", content: `Write a recipe for: ${request}\nServings: ${serves}\n${prefs ? "About this cook:\n" + prefs : ""}\n\nCall the create_recipe tool.` }],
+            tools: [tool],
+            maxTokens: 4000,
+            purpose: "recipe",
+          });
+          const call = (resp.content || []).find((b) => b.type === "tool_use");
+          raw = call && call.input;
+        }
+        const r = GA.Kitchen.normalize(raw);
+        if (r) return r;
+      }
+      throw new AIError("recipe", "I couldn't make that recipe right now.");
     },
 
     /* Single-purpose structured request (e.g. reading a handwritten recipe). */

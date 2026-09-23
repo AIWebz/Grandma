@@ -55,7 +55,9 @@
   }
 
   async function modelId(key) {
-    const m = MODELS.find((x) => x.key === (key || cfg().model)) || MODELS[0];
+    let k = key || cfg().model;
+    if (k === "7b" && !GA.Plans.can("bigBrain")) k = "3b"; // Smartest is a Grandma Pro perk
+    const m = MODELS.find((x) => x.key === k) || MODELS[0];
     const g = await support();
     return `${m.base}-${g.f16 ? "q4f16_1" : "q4f32_1"}-MLC`;
   }
@@ -159,7 +161,7 @@ Always answer with JSON: {"actions": [...], "reply": "..."}
 - "actions": things to do in the app right now, each {"name": "...", "arguments": {...}}. Use [] when nothing needs doing.
 - When they ask you to add, remind, plan, make a list, save, or remember something, include the matching action. Never say you did something without the action.
 - The app shows a card for every action, so don't repeat whole recipes or lists in "reply".
-- Suggesting a specific dish → create_recipe with real quantities, steps, and one or two tips.
+- Suggesting a specific dish → create_recipe with the dish name (the app writes out the full recipe). If you don't know what ingredients they have yet, ask first.
 - A messy house or a big job → add_tasks with 3-5 small tasks for one area.
 - Dates are YYYY-MM-DD (work them out from today's date below); times are HH:MM (24-hour). "Remind me" → remind: true.
 - Use ids from the context to update, complete, or scale existing things. Respect remembered dislikes and allergies, and say when you left something out.
@@ -176,7 +178,55 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     }
     return s.type === "integer" ? "number" : s.type || "any";
   };
-  const toolDocs = (tools) => tools.map((t) => `- ${t.name} ${sig(t.input_schema)} — ${t.description.split(". ")[0]}.`).join("\n");
+  // Recipes are written in a second, dedicated step with a strict schema, so
+  // the first step only has to pick the dish.
+  const LOCAL_DOCS = {
+    create_recipe: "- create_recipe {name: string, notes?: string, servings?: number} — Suggest one specific dish; the app writes out the full recipe card.",
+  };
+  const toolDocs = (tools) => tools.map((t) => LOCAL_DOCS[t.name] || `- ${t.name} ${sig(t.input_schema)} — ${t.description.split(". ")[0]}.`).join("\n");
+
+  const SECTIONS = ["produce", "meat", "dairy", "pantry", "other"];
+  const RECIPE_SCHEMA = {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      description: { type: "string" },
+      emoji: { type: "string" },
+      servings: { type: "integer" },
+      prep_minutes: { type: "integer" },
+      cook_minutes: { type: "integer" },
+      difficulty: { type: "string", enum: ["Easy", "Medium", "Hard"] },
+      categories: { type: "array", items: { type: "string", enum: ["Breakfast", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"] } },
+      ingredients: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { qty: { type: "number" }, unit: { type: "string" }, item: { type: "string" }, section: { type: "string", enum: SECTIONS } },
+          required: ["qty", "unit", "item", "section"],
+        },
+      },
+      steps: { type: "array", items: { type: "string" } },
+      tips: { type: "array", items: { type: "string" } },
+    },
+    required: ["name", "description", "emoji", "servings", "prep_minutes", "cook_minutes", "difficulty", "categories", "ingredients", "steps", "tips"],
+  };
+
+  /* Write one full recipe with the engine enforcing the recipe shape. */
+  async function recipe({ request, prefs, servings }) {
+    const eng = await load();
+    const res = await eng.chat.completions.create({
+      messages: [
+        { role: "system", content: GA.AI.RECIPE_WRITER + ' Use qty 0 and unit "" for "to taste". Pick one food emoji.' },
+        { role: "user", content: `Write a recipe for: ${request}\nServings: ${servings || 4}${prefs ? "\nAbout this cook:\n" + prefs : ""}` },
+      ],
+      temperature: 0.6,
+      max_tokens: 1500,
+      response_format: { type: "json_object", schema: JSON.stringify(RECIPE_SCHEMA) },
+    });
+    return parseJSON(res.choices[0].message.content);
+  }
+
+  const RECIPE_INTENT = /\brecipes?\b|what('?s| is| should i (make|cook)).{0,12}(dinner|lunch|breakfast|supper|dessert)|\b(make|cook|bake)\b.{0,20}\b(dinner|lunch|breakfast|supper|dessert)\b(?!.{0,20}\b(list|plan)\b)|\bi (have|'ve got|got)\b.{0,80}\b(chicken|beef|pork|rice|pasta|eggs?|potato(es)?|beans|fish|salmon|shrimp|tofu|cheese|broccoli|ground|turkey|sausage|noodles|flour|apples?|bananas?)\b/i;
 
   const responseSchema = (tools) =>
     JSON.stringify({
@@ -293,6 +343,22 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     }
     const names = new Set(tools.map((t) => t.name));
     const actions = (Array.isArray(j.actions) ? j.actions : []).filter((a) => a && names.has(a.name));
+
+    // They clearly asked for a recipe but the model only talked about it.
+    const userText = typeof last.content === "string" ? last.content : (last.content || []).filter((b) => b.type === "text").map((b) => b.text).join(" ");
+    if (names.has("create_recipe") && RECIPE_INTENT.test(userText) && !actions.some((a) => a.name === "create_recipe") && !/\?\s*$/.test(String(j.reply || "").trim())) {
+      actions.push({ name: "create_recipe", arguments: { name: "", notes: userText } });
+    }
+    // Write each suggested dish out as a full recipe (strict shape).
+    for (const a of actions) {
+      if (a.name !== "create_recipe" || GA.Kitchen.normalize(a.arguments) || GA.Plans.recipeGensLeft() <= 0) continue;
+      const args = a.arguments || {};
+      const request = [args.name, args.notes, `(They said: "${userText.slice(0, 300)}")`].filter(Boolean).join(". ");
+      try {
+        const full = await recipe({ request, prefs: GA.Kitchen.prefs(), servings: args.servings || GA.Kitchen.defaultServings() });
+        if (full) a.arguments = full;
+      } catch (e) { /* the handler reports the problem */ }
+    }
     const content = [];
     if (j.reply && String(j.reply).trim()) content.push({ type: "text", text: String(j.reply).trim() });
     actions.forEach((a, i) => content.push({ type: "tool_use", id: `act_${Date.now().toString(36)}_${i}`, name: a.name, input: a.arguments || {} }));
@@ -323,7 +389,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
 
   /* ================= "Turn on Grandma" setup ================= */
   function openSetup({ onDone } = {}) {
-    const state = { step: "choose", model: cfg().model, downloaded: {}, support: null, progress: null, error: "" };
+    const state = { step: "choose", model: cfg().model === "7b" && !GA.Plans.can("bigBrain") ? "3b" : cfg().model, downloaded: {}, support: null, progress: null, error: "" };
 
     U.openSheet({
       title: "Turn on Grandma",
@@ -346,8 +412,11 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
             html += `<div class="setup-card center">${U.avatar(72)}<h3>Grandma is ready ❤️</h3><p class="muted">She's running right inside this browser. Ask her what's for dinner.</p>
               <button class="btn primary" data-finish>Start chatting</button></div>`;
           } else {
-            const opt = (m) => `<label class="choice ${state.model === m.key ? "on" : ""}"><input type="radio" name="model" value="${m.key}" ${state.model === m.key ? "checked" : ""} ${state.progress ? "disabled" : ""}>
-                <span class="grow"><b>${m.label}</b> <span class="muted">· ${m.size}</span><small>${m.note}</small></span>${state.downloaded[m.key] ? `<span class="tag ok">Downloaded</span>` : ""}</label>`;
+            const opt = (m) => {
+              const locked = m.key === "7b" && !GA.Plans.can("bigBrain");
+              return `<label class="choice ${state.model === m.key ? "on" : ""} ${locked ? "locked" : ""}"><input type="radio" name="model" value="${m.key}" ${state.model === m.key ? "checked" : ""} ${state.progress || locked ? "disabled" : ""}>
+                <span class="grow"><b>${m.label}</b> <span class="muted">· ${m.size}</span><small>${m.note}</small></span>${locked ? `<span class="tag-pro">Pro</span>` : state.downloaded[m.key] ? `<span class="tag ok">Downloaded</span>` : ""}</label>`;
+            };
             const ready = state.downloaded[state.model];
             html += `<div class="setup-card"><p><b>Choose Grandma's brain.</b> ${ready ? "It's already on this device." : "It's a one-time download — Wi-Fi is best."}</p>
               <div class="choices">${MODELS.map(opt).join("")}</div>
@@ -438,6 +507,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     preload,
     chat,
     json,
+    recipe,
     ocr,
     openSetup,
     status: () => status,

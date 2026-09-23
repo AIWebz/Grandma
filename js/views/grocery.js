@@ -48,6 +48,7 @@
           <div><h2>Grocery List</h2><p>${items.filter((g) => !g.checked).length} item${items.filter((g) => !g.checked).length === 1 ? "" : "s"} to get${Store.doc("household").id ? " · shared with " + U.esc(Store.doc("household").name) : ""}</p></div>
           <div class="row">
             ${items.length ? `<button class="btn ghost" data-share>${U.icon("upload")}Share</button>` : ""}
+            <button class="btn ghost" data-from-plan>${U.icon("calendar")}From my meal plan${GA.Plans.can("autoGrocery") ? "" : ` <span class="tag-pro">Grandma+</span>`}</button>
             <button class="btn primary" data-ask="Make a grocery list for this week's dinners">${U.icon("sparkle")}Make me a list</button>
           </div>
         </div>
@@ -93,6 +94,11 @@
         return;
       }
       if (e.target.closest("[data-share]")) share();
+      if (e.target.closest("[data-from-plan]")) {
+        if (!GA.Plans.gate("autoGrocery", "Automatic grocery lists")) return;
+        const n = GA.Planner.groceryFromPlan();
+        U.toast(n ? `Added ${n} items from this week's meal plan` : "No recipes in your planner this week yet — try “Plan the week's dinners” in the Planner.");
+      }
     };
     GA.Ads.banner(U.$("[data-ad]", root), "grocery");
   }

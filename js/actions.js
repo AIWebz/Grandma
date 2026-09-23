@@ -51,6 +51,34 @@
 
   /* ---------------- recipes ---------------- */
   const seedList = () => window.GA_SEED_RECIPES || [];
+  const SECTIONS = ["produce", "meat", "dairy", "pantry", "other"];
+  const RECIPE_CATS = ["Breakfast", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"];
+  const VULGAR = { "½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125 };
+  const toNumber = (v) => {
+    if (typeof v === "number") return isFinite(v) ? v : null;
+    const t = String(v == null ? "" : v).trim();
+    if (!t) return null;
+    let total = 0;
+    let any = false;
+    for (const part of t.split(/\s+/)) {
+      if (VULGAR[part] != null) { total += VULGAR[part]; any = true; continue; }
+      const f = part.match(/^(\d+)\/(\d+)$/);
+      if (f) { total += Number(f[1]) / Number(f[2]); any = true; continue; }
+      const mixed = part.match(/^(\d+)([½¼¾⅓⅔⅛])$/);
+      if (mixed) { total += Number(mixed[1]) + VULGAR[mixed[2]]; any = true; continue; }
+      if (/^\d*\.?\d+$/.test(part)) { total += Number(part); any = true; continue; }
+      break;
+    }
+    return any ? total : null;
+  };
+  const UNIT_RE = "cups?|c\\.|tablespoons?|tbsps?|tbs|teaspoons?|tsps?|pounds?|lbs?|ounces?|oz|grams?|g|kilograms?|kg|ml|milliliters?|liters?|l|cloves?|cans?|pinch(?:es)?|dash(?:es)?|slices?|sticks?|sprigs?|stalks?|bunch(?:es)?|heads?|handfuls?|packages?|pkgs?|jars?|quarts?|qts?|pints?|pts?";
+  function parseIngredient(str) {
+    const t = String(str).replace(/^[-•*\s]+/, "").trim();
+    if (!t) return null;
+    const m = t.match(new RegExp("^((?:\\d+\\s+)?\\d+\\/\\d+|\\d+[½¼¾⅓⅔⅛]|\\d*\\.?\\d+|[½¼¾⅓⅔⅛])(?:\\s*([½¼¾⅓⅔⅛]))?\\s*(?:(" + UNIT_RE + ")\\.?\\s+)?(?:of\\s+)?(.+)$", "i"));
+    if (!m) return { qty: null, unit: "", item: t };
+    return { qty: toNumber(m[1] + (m[2] ? " " + m[2] : "")), unit: m[3] || "", item: m[4].trim() };
+  }
 
   const Kitchen = {
     get(id) {
@@ -110,6 +138,95 @@
       if (!r) return null;
       return Store.update("recipes", id, { servings: U.clamp(Math.round(servings), 1, 200) });
     },
+    /*
+     * Turn whatever the model produced into a clean recipe. Small models
+     * sometimes write ingredients as plain strings ("1 1/2 cups rice") or
+     * steps as one paragraph, so accept those too.
+     */
+    normalize(input) {
+      if (!input || typeof input !== "object") return null;
+      const name = String(input.name || input.title || "").trim();
+      let ings = input.ingredients || [];
+      if (typeof ings === "string") ings = ings.split(/\n|;/);
+      const ingredients = (Array.isArray(ings) ? ings : [])
+        .map((i) => (typeof i === "string" ? parseIngredient(i) : {
+          qty: toNumber(i.qty != null ? i.qty : i.quantity),
+          unit: String(i.unit || "").trim(),
+          item: String(i.item || i.name || i.ingredient || "").trim(),
+          section: i.section,
+        }))
+        .filter((i) => i && i.item)
+        .map((i) => ({ ...i, qty: i.qty > 0 ? i.qty : null, section: SECTIONS.includes(i.section) ? i.section : Grocery.guessSection(i.item) }));
+      let steps = input.steps || input.instructions || [];
+      if (typeof steps === "string") steps = steps.split(/\n+|(?<=\.)\s+(?=\d+[.)]\s)/);
+      steps = (Array.isArray(steps) ? steps : []).map((x) => String(typeof x === "object" ? x.text || x.step || "" : x).replace(/^\s*(step\s*)?\d+[.):-]\s*/i, "").trim()).filter(Boolean);
+      if (!name || ingredients.length < 2 || !steps.length) return null;
+      const int = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) : d);
+      const tips = (Array.isArray(input.tips) ? input.tips : input.tips ? [input.tips] : []).map(String).map((t) => t.trim()).filter(Boolean).slice(0, 3);
+      return {
+        name: name.charAt(0).toUpperCase() + name.slice(1),
+        description: String(input.description || "").trim(),
+        emoji: typeof input.emoji === "string" && input.emoji.trim() && input.emoji.trim().length <= 4 ? input.emoji.trim() : "🍲",
+        categories: (input.categories || []).filter((c) => RECIPE_CATS.includes(c)),
+        servings: Math.max(1, int(input.servings, 4) || 4),
+        prepMinutes: int(input.prep_minutes != null ? input.prep_minutes : input.prepMinutes, 0),
+        cookMinutes: int(input.cook_minutes != null ? input.cook_minutes : input.cookMinutes, 0),
+        difficulty: ["Easy", "Medium", "Hard"].includes(input.difficulty) ? input.difficulty : "Easy",
+        ingredients,
+        steps,
+        tips,
+      };
+    },
+
+    /* Store a generated recipe (not saved to "My recipes" until the person saves it). */
+    createFrom(input, extra) {
+      const r = Kitchen.normalize(input);
+      if (!r) return null;
+      return Store.add("recipes", { ...r, baseServings: r.servings, saved: false, source: "ai", convId: extra && extra.convId });
+    },
+
+    /*
+     * What Grandma should know when writing a recipe. Allergies and foods to
+     * avoid always count (that's safety). Full personalization — diet, household
+     * size, skill, favorite cuisines, and remembered likes — is a Grandma+ perk.
+     */
+    prefs() {
+      const c = Store.doc("settings").cooking || {};
+      const lines = [];
+      if (c.allergies) lines.push(`Allergies — never use: ${c.allergies}.`);
+      const mem = Store.doc("settings").memoryEnabled ? Store.list("memory") : [];
+      mem.filter((m) => m.category === "dislikes" || /allerg/i.test(m.fact)).forEach((m) => lines.push(`Avoid: ${m.fact}.`));
+      if (GA.Plans.can("cookingPrefs")) {
+        if (c.avoid) lines.push(`Doesn't like: ${c.avoid}.`);
+        if (c.diet) lines.push(`Diet: ${c.diet}.`);
+        if (c.skill) lines.push(`Cooking skill: ${c.skill}.`);
+        if (c.cuisines) lines.push(`Favorite cuisines: ${c.cuisines}.`);
+        mem.filter((m) => ["likes", "diet", "skill", "household"].includes(m.category)).forEach((m) => lines.push(m.fact + "."));
+      }
+      return lines.join("\n");
+    },
+    defaultServings() {
+      const c = Store.doc("settings").cooking || {};
+      return GA.Plans.can("cookingPrefs") && c.servings ? Number(c.servings) : 4;
+    },
+
+    /* No AI available: find the closest built-in recipes to what they typed. */
+    findSimilar(text, n = 3) {
+      const words = String(text).toLowerCase().match(/[a-z]{3,}/g) || [];
+      const stop = new Set(["have", "with", "some", "and", "the", "for", "make", "want", "what", "can", "something", "dinner", "lunch", "breakfast", "recipe", "got", "that", "this", "use"]);
+      const keys = words.filter((w) => !stop.has(w));
+      if (!keys.length) return [];
+      return Kitchen.all()
+        .map((r) => {
+          const hay = (r.name + " " + r.description + " " + (r.categories || []).join(" ") + " " + r.ingredients.map((i) => i.item).join(" ")).toLowerCase();
+          return { r, score: keys.reduce((a, w) => a + (hay.includes(w.replace(/s$/, "")) ? 1 : 0), 0) };
+        })
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, n)
+        .map((x) => x.r);
+    },
+
     addToGrocery(id) {
       const r = Kitchen.get(id);
       if (!r) return [];
@@ -131,7 +248,7 @@
         category: t.category || "other",
         dueDate: U.isValidKey(t.due_date || t.dueDate) ? t.due_date || t.dueDate : "",
         dueTime: U.isValidTime(t.due_time || t.dueTime) ? t.due_time || t.dueTime : "",
-        recurrence: t.recurrence || "none",
+        recurrence: GA.Plans.can("recurring") && ["daily", "weekly", "monthly"].includes(t.recurrence) ? t.recurrence : "none",
         remind: Boolean(t.remind),
         notes: t.notes || "",
         completed: false,
@@ -221,39 +338,22 @@
     },
 
     create_recipe(input, extra) {
-      const ingredients = (input.ingredients || []).map((i) => ({
-        qty: typeof i.qty === "number" && isFinite(i.qty) && i.qty > 0 ? i.qty : null,
-        unit: i.unit || "",
-        item: String(i.item || "").trim(),
-        section: i.section || Grocery.guessSection(i.item || ""),
-      })).filter((i) => i.item);
-      const steps = (input.steps || []).map((s) => String(s).trim()).filter(Boolean);
-      if (!input.name || !ingredients.length || !steps.length) return { error: "A recipe needs a name, ingredients, and steps." };
-      const servings = Math.max(1, Math.round(input.servings || 4));
-      const recipe = Store.add("recipes", {
-        name: input.name.trim(),
-        description: input.description || "",
-        emoji: input.emoji || "🍲",
-        categories: input.categories || [],
-        servings,
-        baseServings: servings,
-        prepMinutes: input.prep_minutes || 0,
-        cookMinutes: input.cook_minutes || 0,
-        difficulty: input.difficulty || "Easy",
-        ingredients,
-        steps,
-        tips: input.tips || [],
-        saved: false,
-        source: "ai",
-        convId: extra && extra.convId,
-      });
+      if (GA.Plans.recipeGensLeft() <= 0) {
+        return {
+          result: { created: false, reason: `Daily recipe limit reached on the ${GA.Plans.current().name} plan. Tell them kindly; more recipes come with an upgrade.` },
+          card: { type: "upgrade", reason: "recipeGens" },
+        };
+      }
+      const recipe = Kitchen.createFrom(input, extra);
+      if (!recipe) return { error: "That recipe was incomplete. Include a name, at least two ingredients with amounts, and the steps." };
+      GA.Plans.recordRecipeGen();
       let savedNote = "";
       if (input.save) {
         const s = Kitchen.save(recipe.id, true);
         savedNote = s.error ? "not saved: saved-recipe limit reached on the Free plan" : "saved";
       }
       return {
-        result: { recipe_id: recipe.id, name: recipe.name, servings, status: savedNote || "shown as a card, not saved yet" },
+        result: { recipe_id: recipe.id, name: recipe.name, servings: recipe.servings, status: savedNote || "shown as a card, not saved yet" },
         card: { type: "recipe", id: recipe.id },
       };
     },
@@ -283,10 +383,18 @@
 
     plan_day(input) {
       if (!U.isValidKey(input.date)) return { error: "date must be YYYY-MM-DD" };
+      const ahead = Math.round((U.parseKey(input.date) - U.parseKey(U.today())) / 86400000);
+      const horizon = GA.Plans.limit("planDays");
+      if (ahead >= horizon) {
+        return {
+          result: { planned: false, reason: `The ${GA.Plans.current().name} plan plans up to ${horizon} day${horizon === 1 ? "" : "s"} ahead. Offer to plan today instead, and mention that weekly planning comes with an upgrade.` },
+          card: { type: "upgrade", reason: "planDays" },
+        };
+      }
       if (input.mode === "replace") Store.list("plan").filter((p) => p.date === input.date).forEach((p) => Store.remove("plan", p.id));
       for (const id of input.remove_ids || []) Store.remove("plan", id);
       const items = (input.items || []).filter((i) => i && i.title && U.isValidTime(i.time));
-      const made = items.length ? Store.addMany("plan", items.map((i) => ({ date: input.date, time: i.time, title: i.title.trim(), durationMin: i.duration_minutes || 0, done: false }))) : [];
+      const made = items.length ? Store.addMany("plan", items.map((i) => ({ date: input.date, time: i.time, title: i.title.trim(), durationMin: i.duration_minutes || 0, recipeId: i.recipe_id && Kitchen.get(i.recipe_id) ? i.recipe_id : "", done: false }))) : [];
       return { result: { date: input.date, items: made.map((p) => ({ id: p.id, time: p.time, title: p.title })) }, card: { type: "plan", date: input.date } };
     },
 
