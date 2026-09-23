@@ -109,6 +109,7 @@
     const plan = GA.Plans.current();
     const email = GA.Account.email();
     U.$("#sb-bottom").innerHTML = `
+      ${GA.Install.available() ? `<button class="nav-item get-app" data-action="install">${U.icon("download")}<span>Get the app</span></button>` : ""}
       <a class="nav-item ${route === "settings" ? "on" : ""}" href="#/settings" data-route="settings">${U.icon("settings")}<span>Settings</span></a>
       <a class="nav-item ${route === "pricing" ? "on" : ""}" href="#/pricing" data-route="pricing">${U.icon("star")}<span>Grandma+</span>${plan.id === "free" ? `<span class="pill">Upgrade</span>` : ""}</a>
       <a class="nav-item ${route === "profile" ? "on" : ""}" href="#/profile" data-route="profile">
@@ -391,6 +392,11 @@
         return;
       }
       const act = e.target.closest("[data-action]");
+      if (act && act.dataset.action === "install") {
+        closeNav();
+        GA.Install.open();
+        return;
+      }
       if (act && act.dataset.action === "new-chat") {
         GA.Chat.newChat();
         setRoute("chat", { replace: route === "chat" });
@@ -527,13 +533,17 @@
     onHash();
     U.$("#app").dataset.loading = "false";
     GA.Notify.start();
+    GA.Install.onChange(() => {
+      updateNav();
+      if (route === "settings" || route === "chat") GA.App.refreshAll();
+    });
     GA.Brain.onStatus(U.debounce(() => {
       updateTopbar();
       GA.Chat.updateBrainNote();
       if (route === "settings") scheduleRefresh("local");
     }, 150));
     // Load Grandma's brain from the browser cache in the background.
-    setTimeout(() => GA.AI.mode() === "local" && GA.Brain.preload(), 1500);
+    setTimeout(() => GA.Brain.preload(), 1500);
     if (!Store.doc("profile").onboarded) setTimeout(onboarding, 250);
     handleCheckoutReturn();
   }

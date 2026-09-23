@@ -118,7 +118,7 @@
     return out;
   };
 
-  const flush = U.debounce(async () => {
+  async function writePending() {
     const keys = [...pendingWrites];
     pendingWrites.clear();
     for (const k of keys) {
@@ -128,7 +128,8 @@
         console.warn("Could not save", k, e);
       }
     }
-  }, 150);
+  }
+  const flush = U.debounce(writePending, 150);
 
   function touched(key) {
     pendingWrites.add(key);
@@ -187,6 +188,9 @@
     doc(key) {
       return state[key] || DEFAULTS[key] || {};
     },
+    /* Write pending changes right away (e.g. before reloading the page). */
+    saveNow: writePending,
+
     setDoc(key, patch) {
       state[key] = deepMerge(state[key] || DEFAULTS[key] || {}, patch);
       state[key].updatedAt = Date.now();

@@ -2,7 +2,7 @@
  * Grandma AI — service worker: offline app shell + notification clicks.
  * Bump VERSION when you deploy changes so returning visitors get them.
  */
-const VERSION = "grandma-v8";
+const VERSION = "grandma-v9";
 const SHELL = [
   "./",
   "index.html",
@@ -19,6 +19,7 @@ const SHELL = [
   "js/voice.js",
   "js/ads.js",
   "js/notify.js",
+  "js/install.js",
   "js/recipe-ui.js",
   "js/chat.js",
   "js/views/recipes.js",
@@ -49,6 +50,33 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+/*
+ * Multi-core AI on phones. The Phone brains run on the processor, and a page
+ * may only use several cores when it's "cross-origin isolated", which needs two
+ * response headers. GitHub Pages can't send custom headers, so this worker adds
+ * them — only once someone has chosen a Phone brain (the page sets a flag).
+ */
+const FLAGS = "ga-flags";
+let isolate = null;
+const isolationOn = async () => {
+  if (isolate === null) isolate = Boolean(await (await caches.open(FLAGS)).match("coi"));
+  return isolate;
+};
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "coi") isolate = Boolean(e.data.on);
+});
+// Chrome, Edge, and Firefox allow "credentialless", which keeps third-party
+// images and fonts working; Safari needs "require-corp".
+const COEP = /Chrome\/|Firefox\//.test(self.navigator.userAgent) && !/iPhone|iPad|iPod/.test(self.navigator.userAgent) ? "credentialless" : "require-corp";
+function withIsolation(res) {
+  if (!res || res.status === 0 || res.type === "opaqueredirect") return res;
+  const headers = new Headers(res.headers);
+  headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  headers.set("Cross-Origin-Embedder-Policy", COEP);
+  headers.set("Cross-Origin-Resource-Policy", "same-origin");
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 // Same-origin files: serve from cache, refresh in the background.
 // Everything else (AI proxy, Supabase, ads) always goes to the network.
 self.addEventListener("fetch", (e) => {
@@ -63,7 +91,8 @@ self.addEventListener("fetch", (e) => {
           return res;
         })
         .catch(() => cached || (e.request.mode === "navigate" ? cache.match("index.html") : undefined));
-      return cached || network;
+      const res = await (cached || network);
+      return (await isolationOn()) ? withIsolation(res) : res;
     })
   );
 });

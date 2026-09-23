@@ -882,3 +882,14 @@ p { margin: 0; }
 /* "Downloading Grandma…" note under the typing dots, only while a reply waits on it */
 [data-brain-dl] { font-size: 13px; margin: 6px 0 0; }
 [data-brain-dl]:empty { display: none; }
+
+/* ---------- Get the app ---------- */
+button.nav-item { width: 100%; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.get-app-chip { display: inline-flex; align-items: center; gap: 8px; margin: 4px auto 14px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: inherit; font: inherit; font-size: 14px; cursor: pointer; }
+.get-app-chip svg { width: 16px; height: 16px; }
+.install-hero { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }
+.install-hero h3 { margin: 0 0 4px; }
+.install-steps { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 10px; }
+.install-steps li { display: flex; gap: 12px; align-items: flex-start; line-height: 1.45; }
+.install-steps .n { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--ink-text, #fff); font-weight: 600; font-size: 14px; }
+.inline-ico { width: 18px; height: 18px; vertical-align: -3px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

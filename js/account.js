@@ -291,7 +291,10 @@
       if (img.dataset.loaded) return;
       img.dataset.loaded = "1";
       const url = await Account.mediaURL({ id: img.dataset.mediaId, path: img.dataset.mediaPath });
-      if (url) img.src = url;
+      if (url) {
+        if (/^https?:/.test(url)) img.crossOrigin = "anonymous"; // loads on multi-core (isolated) pages too
+        img.src = url;
+      }
       else img.closest(".media-frame") && img.closest(".media-frame").classList.add("missing");
     });
   };

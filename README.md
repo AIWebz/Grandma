@@ -172,7 +172,11 @@ The browser downloads the model once from Hugging Face, with a progress bar, and
 **What browsers work.** All modern browsers work:
 
 - **Graphics chip (fast):** Chrome and Edge on Windows, Mac, ChromeOS, and Android, and Safari on iOS 26 / macOS 26 or newer.
-- **Processor (everywhere else):** iPhones and iPads on older iOS, Firefox, and other phones. Replies take longer to start there, because a phone's processor reads the prompt more slowly than a graphics chip. The processor engine runs single-threaded because GitHub Pages can't send the headers multi-threading needs. On a host where you control headers, add `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` and it will use more cores automatically.
+- **Processor (everywhere else):** iPhones and iPads on older iOS, Firefox, and other phones. Replies take longer to start there, because a phone's processor reads the prompt more slowly than a graphics chip. To keep them quick:
+  - **Several cores.** A page can use more than one processor core only when it's "cross-origin isolated", which needs two response headers that GitHub Pages can't send. Once someone picks a Phone brain, `sw.js` adds `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` to the app's own responses, and the page reloads once to pick them up. Settings shows how many cores are in use. This is skipped when `ads.provider` is `"adsense"`, because ad frames can't load on isolated pages.
+  - **A short, fixed prompt.** The Phone brains get a much shorter prompt and seven simple actions. The prompt never changes, so the engine reuses its work from one message to the next. Today's details ride along with the newest message.
+  - **Exact output rules.** A grammar allows exactly the answer shape (`{"reply": ..., "actions": [...]}` with each action's real arguments), so a small model can't waste time on stray spaces or invalid actions.
+  - **Shorter recipes** on the Phone brains (up to 12 ingredients and 8 steps).
 
 Recipes, tasks, groceries, the planner, and the cookbook work everywhere.
 
@@ -293,6 +297,19 @@ Apple and Google generally require their own billing for digital subscriptions s
 **Restore Purchases** asks the wrapper to restore and re-reads the plan from the server.
 
 ---
+
+## Installing the app (no app store needed)
+
+Grandma is a Progressive Web App, so anyone can install her from the website:
+
+- **Chrome, Edge, Samsung Internet, Android:** a **Get the app** button (in the sidebar, in Settings, and on the phone welcome screen) opens the browser's one-tap install.
+- **iPhone / iPad:** the same button shows three steps: **Share → Add to Home Screen → Add**.
+- **Mac Safari (macOS 14+):** **File → Add to Dock**.
+- **Firefox on computers:** can't install web apps, so the sheet suggests Chrome or Edge.
+
+Once installed, Grandma opens in her own full-screen window, with her own icon on the home screen, dock, or Start menu, and works offline. The button hides itself when she's already running as an installed app. The code lives in `js/install.js`.
+
+For the App Store and Google Play, see the next two sections.
 
 ## 7. Package the application for iOS
 

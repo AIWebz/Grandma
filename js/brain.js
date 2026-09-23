@@ -38,8 +38,8 @@
   const TIMEOUTS = { gpuFirst: 90000, gpuGap: 30000, cpuFirst: 180000, cpuGap: 45000 };
   // Processor models read more slowly, so they get a shorter conversation.
   const budget = (tight) =>
-    tight ? { history: 0, context: 500 } : backend && backend.kind === "cpu" ? { history: 1500, context: 1000 } : { history: 4200, context: 2400 };
-  const maxOutput = () => (backend && backend.kind === "cpu" ? 500 : MAX_OUTPUT);
+    tight ? { history: 0, context: 500 } : backend && backend.kind === "cpu" ? { history: 1200, context: 1000 } : { history: 4200, context: 2400 };
+  const maxOutput = () => (backend && backend.kind === "cpu" ? 400 : MAX_OUTPUT);
 
   const cfg = () => ({ model: "3b", ready: false, ...(Store.doc("local").brain || {}) });
   const save = (patch) => Store.setDoc("local", { brain: { ...cfg(), ...patch } });
@@ -146,23 +146,40 @@
   }
 
   /* ---- engine: processor (wllama, llama.cpp in WebAssembly) — any phone ---- */
+  /* How many processor cores to use. More cores need a cross-origin isolated page (see sw.js). */
+  function cpuThreads() {
+    if (!self.crossOriginIsolated) return 1;
+    const cores = navigator.hardwareConcurrency || 4;
+    return Math.max(1, Math.min(isMobile() ? 4 : 8, cores - (isMobile() ? 2 : 1)));
+  }
+
   async function startCPU(m, report) {
-    const wl = await newWllama();
-    let downloaded = false;
-    await wl.loadModelFromUrl(m.url, {
+    const opts = (threads) => ({
       n_ctx: 4096,
+      n_batch: 512,
       n_gpu_layers: 0,
+      n_threads: threads,
       progressCallback: ({ loaded, total }) => {
         const pct = total ? loaded / total : 0;
-        downloaded = pct >= 1;
-        report(pct * 0.95, downloaded ? "Loading Grandma from this device…" : `Downloading Grandma — ${Math.round(pct * 100)}% (${Math.round(loaded / 1048576)} MB)`);
+        report(pct * 0.95, pct >= 1 ? "Loading Grandma from this device…" : `Downloading Grandma — ${Math.round(pct * 100)}% (${Math.round(loaded / 1048576)} MB)`);
       },
     });
+    let wl = await newWllama();
+    const threads = cpuThreads();
+    try {
+      await wl.loadModelFromUrl(m.url, opts(threads));
+    } catch (e) {
+      if (threads <= 1) throw e;
+      // Some browsers can't run the multi-core build; fall back to one core.
+      try { await wl.exit(); } catch (e2) { /* ignore */ }
+      wl = await newWllama();
+      await wl.loadModelFromUrl(m.url, opts(1));
+    }
     let ctl = null;
     return {
       kind: "cpu",
       id: m.url,
-      async complete({ messages, temperature, max_tokens, schema, onDelta }) {
+      async complete({ messages, temperature, max_tokens, schema, grammar, onDelta }) {
         ctl = new AbortController();
         try {
           const stream = await wl.createChatCompletion({
@@ -172,7 +189,7 @@
             stream: true,
             cache_prompt: true, // reuse the unchanged start of the prompt between turns
             abortSignal: ctl.signal,
-            response_format: { type: "json_schema", json_schema: { name: "answer", schema } },
+            grammar: grammar || schemaGrammar(schema), // exact answer shape, no stray whitespace
           });
           let text = "";
           let finish = "";
@@ -301,6 +318,7 @@
   const loadScript = (src) =>
     new Promise((resolve, reject) => {
       const s = document.createElement("script");
+      s.crossOrigin = "anonymous";
       s.src = src;
       s.onload = resolve;
       s.onerror = () => reject(new Error("Couldn't load the photo reader."));
@@ -355,6 +373,114 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
   };
   const toolDocs = (tools) => tools.map((t) => LOCAL_DOCS[t.name] || `- ${t.name} ${sig(t.input_schema)} — ${t.description.split(". ")[0]}.`).join("\n");
 
+  /* ================= Phone versions: short prompt, exact output rules =================
+   * A phone's processor reads slowly, so the Phone brains get a much shorter
+   * prompt, a handful of simple actions, and a grammar that allows exactly the
+   * answer shape — no stray spaces, no invalid actions, nothing to wander into.
+   */
+  const PHONE_PROMPT = `You are Grandma AI, a warm, funny, practical AI grandma (an AI, not a real person). You help with cooking, chores, plans, groceries, and reminders.
+Answer only with JSON: {"reply": "...", "actions": [...]}
+- reply: 1-3 short, warm sentences.
+- actions: what to do in the app right now, each {"name": "...", "arguments": {...}}. Use [] when nothing needs doing. Never say you did something without its action.
+- Dates are YYYY-MM-DD, times HH:MM (24-hour). Use ids from "In the app now".
+You're not a doctor, lawyer, or therapist. In a crisis, point to 988 (US) or local emergency help.`;
+  const T_STR = { type: "string" };
+  const T_DATE = { type: "string", format: "date" };
+  const T_TIME = { type: "string", format: "time" };
+  const T_BOOL = { type: "boolean" };
+  const obj = (properties, required) => ({ type: "object", properties, required });
+  const PHONE_TOOLS = {
+    add_tasks: {
+      doc: 'add_tasks {"tasks":[{"title", "due_date"?, "due_time"?, "remind"?}]} — add chores, to-dos, or reminders.',
+      schema: obj({ tasks: { type: "array", maxItems: 6, items: obj({ title: T_STR, due_date: T_DATE, due_time: T_TIME, remind: T_BOOL }, ["title"]) } }, ["tasks"]),
+    },
+    update_tasks: {
+      doc: 'update_tasks {"updates":[{"task_id", "completed"?}]} — mark tasks done.',
+      schema: obj({ updates: { type: "array", maxItems: 6, items: obj({ task_id: T_STR, completed: T_BOOL }, ["task_id"]) } }, ["updates"]),
+    },
+    add_grocery_items: {
+      doc: 'add_grocery_items {"items":[{"name", "quantity"?}]} — add to the grocery list.',
+      schema: obj({ items: { type: "array", maxItems: 12, items: obj({ name: T_STR, quantity: T_STR }, ["name"]) } }, ["items"]),
+    },
+    create_recipe: {
+      doc: 'create_recipe {"name"} — suggest one dish; the app writes out the full recipe.',
+      schema: obj({ name: T_STR }, ["name"]),
+    },
+    add_recipe_to_grocery: {
+      doc: 'add_recipe_to_grocery {"recipe_id"} — put a recipe\'s ingredients on the grocery list.',
+      schema: obj({ recipe_id: T_STR }, ["recipe_id"]),
+    },
+    plan_day: {
+      doc: 'plan_day {"date", "items":[{"time", "title"}]} — plan a day.',
+      schema: obj({ date: T_DATE, items: { type: "array", maxItems: 10, items: obj({ time: T_TIME, title: T_STR }, ["time", "title"]) } }, ["date", "items"]),
+    },
+    remember: {
+      doc: 'remember {"category", "fact"} — save a lasting preference.',
+      schema: obj({ category: { type: "string", enum: ["name", "likes", "dislikes", "diet", "skill", "routine", "household", "style", "other"] }, fact: T_STR }, ["category", "fact"]),
+    },
+  };
+
+  /* JSON schema → a compact GBNF grammar for llama.cpp (no optional whitespace). */
+  const GRAMMAR_BASE = String.raw`value ::= object | array | string | number | boolean | "null"
+object ::= "{" (string ":" value ("," string ":" value)*)? "}"
+array ::= "[" (value ("," value)*)? "]"
+string ::= "\"" char* "\""
+char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+integer ::= "-"? ("0" | [1-9] [0-9]? [0-9]? [0-9]? [0-9]? [0-9]?)
+number ::= integer ("." [0-9] [0-9]? [0-9]?)?
+boolean ::= "true" | "false"
+date ::= "\"" [0-9] [0-9] [0-9] [0-9] "-" [0-9] [0-9] "-" [0-9] [0-9] "\""
+time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
+  function grammarBuilder() {
+    const rules = [];
+    const lit = (str) => JSON.stringify(str);
+    const rule = (body) => {
+      const name = "g" + rules.length;
+      rules.push(`${name} ::= ${body}`);
+      return name;
+    };
+    const list = (item, max) => (max ? `(${item} ("," ${item}){0,${max - 1}})?` : `(${item} ("," ${item})*)?`);
+    function expr(sc) {
+      if (!sc) return "value";
+      if (sc.enum) return "(" + sc.enum.map((v) => lit(JSON.stringify(v))).join(" | ") + ")";
+      if (sc.format === "date") return "date";
+      if (sc.format === "time") return "time";
+      switch (sc.type) {
+        case "string": return "string";
+        case "integer": return "integer";
+        case "number": return "number";
+        case "boolean": return "boolean";
+        case "array": return rule(`"[" ${list(expr(sc.items), sc.maxItems)} "]"`);
+        case "object": {
+          const props = Object.entries(sc.properties || {});
+          if (!props.length) return "object";
+          const req = sc.required && sc.required.length ? sc.required : [props[0][0]];
+          const must = props.filter(([k]) => req.includes(k));
+          const may = props.filter(([k]) => !req.includes(k));
+          const pair = ([k, v]) => `${lit(JSON.stringify(k) + ":")} ${expr(v)}`;
+          const body = must.map(pair).join(` "," `) + may.map((p) => ` ("," ${pair(p)})?`).join("");
+          return rule(`"{" ${body} "}"`);
+        }
+        default: return "value";
+      }
+    }
+    return { expr, lit, rule, build: (root) => `root ::= ${root}\n${rules.join("\n")}\n${GRAMMAR_BASE}` };
+  }
+  const schemaGrammar = (schema) => {
+    const g = grammarBuilder();
+    return g.build(g.expr(schema));
+  };
+  /* Grandma's chat answer: {"reply": "...", "actions": [ up to 4 of the allowed actions ]}. */
+  const chatGrammar = (toolNames) => {
+    const g = grammarBuilder();
+    let actions = '"[]"';
+    if (toolNames.length) {
+      const one = g.rule(toolNames.map((n) => `${g.lit(`{"name":${JSON.stringify(n)},"arguments":`)} ${g.expr(PHONE_TOOLS[n].schema)} "}"`).join(" | "));
+      actions = `"[" (${one} ("," ${one}){0,3})? "]"`;
+    }
+    return g.build(`${g.lit('{"reply":')} string ${g.lit(',"actions":')} ${actions} "}"`);
+  };
+
   const SECTIONS = ["produce", "meat", "dairy", "pantry", "other"];
   const RECIPE_SCHEMA = {
     type: "object",
@@ -380,6 +506,17 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     },
     required: ["name", "description", "emoji", "servings", "prep_minutes", "cook_minutes", "difficulty", "categories", "ingredients", "steps", "tips"],
   };
+  // Phone versions write a slightly shorter recipe so it's ready sooner.
+  const PHONE_RECIPE_SCHEMA = {
+    ...RECIPE_SCHEMA,
+    properties: {
+      ...RECIPE_SCHEMA.properties,
+      categories: { ...RECIPE_SCHEMA.properties.categories, maxItems: 2 },
+      ingredients: { ...RECIPE_SCHEMA.properties.ingredients, maxItems: 12 },
+      steps: { ...RECIPE_SCHEMA.properties.steps, maxItems: 8 },
+      tips: { ...RECIPE_SCHEMA.properties.tips, maxItems: 2 },
+    },
+  };
 
   /* Write one full recipe with the engine enforcing the recipe shape. */
   async function recipe({ request, prefs, servings, signal }) {
@@ -390,8 +527,8 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
         { role: "user", content: `Write a recipe for: ${request}\nServings: ${servings || 4}${prefs ? "\nAbout this cook:\n" + prefs : ""}` },
       ],
       temperature: 0.6,
-      max_tokens: backend && backend.kind === "cpu" ? 1000 : 1500,
-      schema: RECIPE_SCHEMA,
+      max_tokens: backend && backend.kind === "cpu" ? 900 : 1500,
+      schema: backend && backend.kind === "cpu" ? PHONE_RECIPE_SCHEMA : RECIPE_SCHEMA,
     }, { signal });
     return parseJSON(res.text);
   }
@@ -416,11 +553,16 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
   });
 
   /* Grandma's stored conversation → short chat for a small model. */
-  async function toMessages(system, messages, tools, tight) {
+  async function toMessages(system, messages, tools, tight, phone) {
     const tone = ((system[0] && system[0].text) || "").match(/Tone for this person:[^\n]*/);
     const { history, context: contextChars } = budget(tight);
-    const context = ((system[1] && system[1].text) || "").slice(0, contextChars);
-    const sys = [LOCAL_PROMPT, tone ? tone[0] : "", tools.length ? "Actions you can use:\n" + toolDocs(tools) : "Answer with actions: [] this time.", context].filter(Boolean).join("\n\n");
+    const rawContext = ((system[1] && system[1].text) || "").slice(0, contextChars);
+    const context = ((system[1] && system[1].text) || "").replace(/^Current app context[^\n]*\n+/, "").slice(0, contextChars);
+    // Phone versions: the system prompt never changes, so the engine can reuse
+    // its work from earlier messages; today's details ride along with the newest message.
+    const sys = phone
+      ? [PHONE_PROMPT, tone ? tone[0] : "", tools.length ? "Actions:\n" + tools.map((t) => "- " + PHONE_TOOLS[t.name].doc).join("\n") : "Use actions: [] this time."].filter(Boolean).join("\n\n")
+      : [LOCAL_PROMPT, tone ? tone[0] : "", tools.length ? "Actions you can use:\n" + toolDocs(tools) : "Answer with actions: [] this time.", rawContext].filter(Boolean).join("\n\n");
 
     const lastUser = messages.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop();
     const out = [];
@@ -459,6 +601,10 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     while (start > 0 && used + out[start - 1].content.length < history) used += out[--start].content.length;
     let recent = out.slice(Math.min(start, out.length - 1));
     while (recent.length && recent[0].role !== "user") recent = recent.slice(1);
+    if (phone && context && recent.length) {
+      const lastMsg = recent[recent.length - 1];
+      recent = [...recent.slice(0, -1), { ...lastMsg, content: `(In the app now — ${U.today()}:\n${context})\n\n${lastMsg.content}` }];
+    }
     return [{ role: "system", content: sys }, ...recent];
   }
 
@@ -495,7 +641,10 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
       return { content: failed.length ? [{ type: "text", text: `Hmm, one thing didn't go through: ${failed[0]}` }] : [], stop_reason: "end_turn" };
     }
     await load();
+    const phone = backend && backend.kind === "cpu";
+    if (phone) tools = tools.filter((t) => PHONE_TOOLS[t.name]);
     const schema = responseSchema(tools.length ? tools : [{ name: "none" }]);
+    const grammar = phone ? chatGrammar(tools.map((t) => t.name)) : undefined;
     let shown = "";
     const onDelta = (text) => {
       const r = partialReply(text);
@@ -504,7 +653,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
         onText && onText(r);
       }
     };
-    const ask = async (tight) => generate({ messages: await toMessages(system, messages, tools, tight), temperature: 0.5, max_tokens: maxOutput(), schema }, { signal, onDelta });
+    const ask = async (tight) => generate({ messages: await toMessages(system, messages, tools, tight, phone), temperature: 0.5, max_tokens: maxOutput(), schema, grammar }, { signal, onDelta });
     let res;
     try {
       res = await ask(false);
@@ -572,8 +721,35 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     return out;
   }
 
+  /* ---- multi-core for the Phone brains (see sw.js) ---- */
+  const adsNeedThirdParty = () => ((window.GRANDMA_CONFIG || {}).ads || {}).provider === "adsense"; // ad frames can't load on isolated pages
+  async function setIsolation(on) {
+    if (adsNeedThirdParty()) on = false;
+    try {
+      const flags = await caches.open("ga-flags");
+      if (on) await flags.put("coi", new Response("1"));
+      else await flags.delete("coi");
+      const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+      if (sw) sw.postMessage({ type: "coi", on });
+    } catch (e) { /* no Cache API: stays single-core */ }
+    return on;
+  }
+  /* Reload once so the page picks up multi-core support. Guarded against loops. */
+  async function reloadForIsolation() {
+    if (self.crossOriginIsolated || !(navigator.serviceWorker && navigator.serviceWorker.controller)) return false;
+    try {
+      if (sessionStorage.getItem("ga-coi-reload")) return false;
+      sessionStorage.setItem("ga-coi-reload", "1");
+    } catch (e) {
+      return false;
+    }
+    await Store.saveNow();
+    location.reload();
+    return true;
+  }
+
   /* ================= "Turn on Grandma" setup ================= */
-  function openSetup({ onDone } = {}) {
+  function openSetup({ onDone, autoStart } = {}) {
     const state = { step: "choose", model: cfg().model === "7b" && !GA.Plans.can("bigBrain") ? "3b" : cfg().model, downloaded: {}, support: null, progress: null, error: "", showAll: false };
 
     U.openSheet({
@@ -617,6 +793,13 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
         async function start() {
           state.error = "";
           save({ model: state.model });
+          const engineKind = modelFor(state.model).engine;
+          if (engineKind === "cpu" && (await setIsolation(true)) && !self.crossOriginIsolated) {
+            // Pick up where we left off after a quick reload that unlocks all the processor's cores.
+            save({ model: state.model, resume: true });
+            if (await reloadForIsolation()) return;
+            save({ resume: false });
+          } else if (engineKind === "gpu") setIsolation(false);
           state.progress = { pct: 0, text: "Starting…" };
           view();
           try {
@@ -680,6 +863,7 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
           view();
           for (const m of MODELS) state.downloaded[m.key] = await isDownloaded(m.key);
           view();
+          if (autoStart) start();
         });
       },
     });
@@ -697,7 +881,15 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
 
   /* Warm up in the background so the first message is quick. */
   function preload() {
+    if (GA.AI.mode() === "proxy") return;
+    if (cfg().resume) {
+      // Came back from the multi-core reload in the middle of setup: carry on.
+      save({ resume: false });
+      openSetup({ autoStart: true, onDone: () => GA.App && GA.App.refreshAll() });
+      return;
+    }
     if (!cfg().ready || backend || loading) return;
+    pick().then((m) => m.engine === "cpu" && setIsolation(true)); // multi-core from the next visit
     // Only warm up from what's already on the device. If the download is gone
     // (e.g. the browser cleared storage), it happens when they next chat, with
     // progress shown, instead of silently using gigabytes in the background.
@@ -720,6 +912,8 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
     ocr,
     openSetup,
     engine: () => (backend ? backend.kind : ""),
+    threads: cpuThreads,
+    grammars: { chat: chatGrammar, schema: schemaGrammar, PHONE_RECIPE_SCHEMA }, // for testing
     activity: () => activity,
     status: () => status,
     onStatus: (fn) => (listeners.add(fn), () => listeners.delete(fn)),

@@ -150,6 +150,7 @@
         <h2>What can Grandma help you with?</h2>
         <p class="sub">Recipes, chores, planning, groceries, or just a little help getting through the day.</p>
         <p class="grandma-line">${U.esc(grandmaLine())}</p>
+        ${GA.Install.available() && GA.Install.deviceWord() !== "computer" ? `<button class="get-app-chip" data-action="install">${U.icon("download")}Get the app on your ${GA.Install.deviceWord()}</button>` : ""}
         ${total ? `<a class="progress-pill" href="#/tasks" data-route="tasks"><span class="ring" style="--p:${pct}"></span><span>Today's Progress · <b>${done} / ${total}</b> tasks completed</span></a>` : ""}
         <div class="prompt-grid">
           ${PROMPTS.map(([e, t]) => `<button class="prompt-card" data-prompt="${U.esc(t)}"><span class="emo">${e}</span><span>${U.esc(t)}</span></button>`).join("")}
