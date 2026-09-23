@@ -180,7 +180,7 @@
       if (backend) await unload();
       status.state = "loading";
       status.progress = 0;
-      status.text = "Waking Grandma up…";
+      status.text = "";
       emit();
       const report = (progress, text) => {
         status.progress = progress;

@@ -295,7 +295,7 @@
     const st = U.$("[data-brain-status]", root);
     if (!st || GA.AI.mode() !== "local") return;
     const s = GA.Brain.status();
-    st.textContent = s.state === "ready" ? "🟢 Awake and ready" + (GA.Brain.engine() === "cpu" ? " · running on the processor" : "") : s.state === "loading" ? `🟡 Waking up… ${Math.round(s.progress * 100)}%` : s.state === "error" ? "🟠 Couldn't start — tap Change to try again" : "⚪ Asleep — wakes up when you chat";
+    st.textContent = s.state === "ready" ? "🟢 Awake and ready" + (GA.Brain.engine() === "cpu" ? " · running on the processor" : "") : s.state === "loading" ? "🟢 On" : s.state === "error" ? "🟠 Couldn't start — tap Change to try again" : "⚪ Asleep — wakes up when you chat";
   }
 
   function memoryForm(m) {

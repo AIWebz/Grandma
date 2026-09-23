@@ -190,10 +190,8 @@
     if (route === "chat") {
       const busy = GA.Chat.busy();
       const connected = GA.AI.connected();
-      const brain = GA.AI.mode() === "local" ? GA.Brain.status() : null;
-      const waking = brain && brain.state === "loading";
-      const status = waking ? `Waking Grandma up… ${Math.round(brain.progress * 100)}%` : busy ? "Grandma is thinking…" : connected ? "Grandma is ready ❤️" : "Tap to turn Grandma on";
-      title.innerHTML = `${U.avatar(32, busy ? "thinking" : "")}<div class="t-stack"><h1>Grandma AI</h1><span class="status ${busy || waking ? "busy" : connected ? "" : "off"}" ${connected ? "" : "data-brain-setup role=\"button\" tabindex=\"0\" style=\"cursor:pointer\""}>${status}</span></div>`;
+      const status = busy ? "Grandma is thinking…" : connected ? "Grandma is ready ❤️" : "Tap to turn Grandma on";
+      title.innerHTML = `${U.avatar(32, busy ? "thinking" : "")}<div class="t-stack"><h1>Grandma AI</h1><span class="status ${busy ? "busy" : connected ? "" : "off"}" ${connected ? "" : "data-brain-setup role=\"button\" tabindex=\"0\" style=\"cursor:pointer\""}>${status}</span></div>`;
       actions.innerHTML = `<button class="icon-btn" data-action="new-chat" aria-label="New conversation" title="New conversation">${U.icon("edit")}</button>`;
     } else {
       // Pages carry their own large heading; keep the bar quiet.
