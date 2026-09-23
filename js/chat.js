@@ -230,6 +230,7 @@
           ${pending.text ? `<div class="content">${U.md(pending.text)}</div>` : ""}
           ${cardsHTML(pending.cards, "p")}
           <div class="typing" aria-label="Grandma is typing"><i></i><i></i><i></i></div>
+          <p class="muted small" data-brain-dl>${brainNote()}</p>
         </div></div>`;
     }
     if (!empty) html += ephemeralHTML();
@@ -290,6 +291,17 @@
     if (!GA.AI.connected()) return "connect";
     if (GA.Plans.remainingMessages() <= 0) return "limit";
     return null;
+  }
+
+  /* While a reply waits on Grandma's brain downloading, say so (and how far along). */
+  function brainNote() {
+    const s = GA.AI.mode() === "local" ? GA.Brain.status() : null;
+    if (!s || s.state !== "loading" || !/^Downloading/.test(s.text || "")) return "";
+    return `${U.esc(s.text)} — one moment, Grandma is getting her brain ready on this device.`;
+  }
+  function updateBrainNote() {
+    const n = el.thread && el.thread.querySelector("[data-brain-dl]");
+    if (n) n.innerHTML = brainNote();
   }
 
   /*
@@ -622,6 +634,7 @@
     mount,
     render,
     busy: () => busy,
+    updateBrainNote,
     currentId: () => currentId,
     open(id) {
       const exists = id && Store.find("conversations", id);

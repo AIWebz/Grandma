@@ -878,3 +878,7 @@ p { margin: 0; }
   .maker-actions .btn.primary { flex: 1; }
   .page-head .row.wrap { justify-content: flex-start; }
 }
+
+/* "Downloading Grandma…" note under the typing dots, only while a reply waits on it */
+[data-brain-dl] { font-size: 13px; margin: 6px 0 0; }
+[data-brain-dl]:empty { display: none; }

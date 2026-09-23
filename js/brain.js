@@ -604,7 +604,10 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
   /* Warm up in the background so the first message is quick. */
   function preload() {
     if (!cfg().ready || backend || loading) return;
-    load().catch(() => {});
+    // Only warm up from what's already on the device. If the download is gone
+    // (e.g. the browser cleared storage), it happens when they next chat, with
+    // progress shown, instead of silently using gigabytes in the background.
+    pick().then((m) => isDownloaded(m.key)).then((have) => have && load().catch(() => {}));
   }
 
   GA.Brain = {

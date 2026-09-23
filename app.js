@@ -529,6 +529,7 @@
     GA.Notify.start();
     GA.Brain.onStatus(U.debounce(() => {
       updateTopbar();
+      GA.Chat.updateBrainNote();
       if (route === "settings") scheduleRefresh("local");
     }, 150));
     // Load Grandma's brain from the browser cache in the background.

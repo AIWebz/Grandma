@@ -2,7 +2,7 @@
  * Grandma AI — service worker: offline app shell + notification clicks.
  * Bump VERSION when you deploy changes so returning visitors get them.
  */
-const VERSION = "grandma-v6";
+const VERSION = "grandma-v7";
 const SHELL = [
   "./",
   "index.html",
@@ -43,7 +43,9 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim())
+    // Only remove this app's old shells — never the AI model caches (webllm/…),
+    // which hold Grandma's multi-gigabyte brain.
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith("grandma-") && k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim())
   );
 });
 
