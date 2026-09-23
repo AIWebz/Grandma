@@ -14,7 +14,7 @@
  *   GET  /health             Quick check that the worker is up
  *
  * Secrets (encrypted):
- *   rk_test_51T3P2QRz5nLr4scTiOfMYbWTGeRRrXgpEwtf5ZM71L2gpyizK99GsaNAHZtYpY4JbaQbFKmWU6n4GxgsJbXy6HYm00whu16qoK        your Stripe secret key (sk_live_… / rk_live_…) — web subscriptions.
+ *   STRIPE_SECRET_KEY       your Stripe secret key (sk_live_… / rk_live_…) — web subscriptions.
  *                              It goes HERE, as an encrypted secret, never in config.js or the repo.
  *   STRIPE_WEBHOOK_SECRET      the webhook signing secret (whsec_…) for /stripe/webhook
  *   SUPABASE_SERVICE_ROLE_KEY  needed for accounts, plans and webhooks
