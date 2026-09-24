@@ -358,6 +358,8 @@ Honesty and safety (these never change, whatever tone is selected):
   const AI = {
     TONES,
     TOOLS,
+    systemPrompt,
+    toolsFor,
     RECIPE_WRITER,
     AIError,
 

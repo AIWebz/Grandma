@@ -35,11 +35,11 @@
   const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
   const MAX_OUTPUT = 1100;
   // How long Grandma may go quiet before we call her stuck (milliseconds).
-  const TIMEOUTS = { gpuFirst: 90000, gpuGap: 30000, cpuFirst: 180000, cpuGap: 45000 };
+  const TIMEOUTS = { gpuFirst: 90000, gpuGap: 30000, cpuFirst: 240000, cpuGap: 60000 };
   // Processor models read more slowly, so they get a shorter conversation.
   const budget = (tight) =>
     tight ? { history: 0, context: 500 } : backend && backend.kind === "cpu" ? { history: 1200, context: 1000 } : { history: 4200, context: 2400 };
-  const maxOutput = () => (backend && backend.kind === "cpu" ? 400 : MAX_OUTPUT);
+  const maxOutput = () => (backend && backend.kind === "cpu" ? 300 : MAX_OUTPUT);
 
   const cfg = () => ({ model: "3b", ready: false, ...(Store.doc("local").brain || {}) });
   const save = (patch) => Store.setDoc("local", { brain: { ...cfg(), ...patch } });
@@ -150,12 +150,13 @@
   function cpuThreads() {
     if (!self.crossOriginIsolated) return 1;
     const cores = navigator.hardwareConcurrency || 4;
-    return Math.max(1, Math.min(isMobile() ? 4 : 8, cores - (isMobile() ? 2 : 1)));
+    // Phones: up to 4 (some report only 2 cores to websites); computers: all but one, up to 8.
+    return isMobile() ? Math.min(4, Math.max(2, cores - 1)) : Math.max(1, Math.min(8, cores - 1));
   }
 
   async function startCPU(m, report) {
     const opts = (threads) => ({
-      n_ctx: 4096,
+      n_ctx: 2048, // Phone prompts are short; a smaller window saves memory
       n_batch: 512,
       n_gpu_layers: 0,
       n_threads: threads,
@@ -215,7 +216,22 @@
    * quiet for too long (a phone that's too slow, or a crashed engine), it is
    * stopped and restarted next time, and the person gets a clear message.
    */
-  async function generate(opts, { signal, onDelta } = {}) {
+  let lane = Promise.resolve(); // one request at a time (the warm-up may be running)
+  function generate(opts, how = {}) {
+    const run = lane.then(() => generateNow(opts, how));
+    lane = run.catch(() => {});
+    if (!how.signal) return run;
+    return Promise.race([
+      run,
+      new Promise((_, reject) => {
+        const stop = () => reject(new DOMException("Aborted", "AbortError"));
+        if (how.signal.aborted) stop();
+        else how.signal.addEventListener("abort", stop, { once: true });
+      }),
+    ]);
+  }
+
+  async function generateNow(opts, { signal, onDelta } = {}) {
     const eng = await load();
     if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
     const cpu = eng.kind === "cpu";
@@ -289,6 +305,7 @@
         status.state = "ready";
         status.progress = 1;
         emit();
+        if (backend.kind === "cpu") warmUp(backend);
         return backend;
       } catch (e) {
         backend = null;
@@ -378,12 +395,22 @@ Safety: you are not a doctor, therapist, lawyer, or financial advisor — give g
    * prompt, a handful of simple actions, and a grammar that allows exactly the
    * answer shape — no stray spaces, no invalid actions, nothing to wander into.
    */
-  const PHONE_PROMPT = `You are Grandma AI, a warm, funny, practical AI grandma (an AI, not a real person). You help with cooking, chores, plans, groceries, and reminders.
-Answer only with JSON: {"reply": "...", "actions": [...]}
-- reply: 1-3 short, warm sentences.
-- actions: what to do in the app right now, each {"name": "...", "arguments": {...}}. Use [] when nothing needs doing. Never say you did something without its action.
-- Dates are YYYY-MM-DD, times HH:MM (24-hour). Use ids from "In the app now".
-You're not a doctor, lawyer, or therapist. In a crisis, point to 988 (US) or local emergency help.`;
+  const PHONE_PROMPT = `You are Grandma AI, a warm, practical AI grandma (not a real person) who helps with cooking, chores, plans, groceries, and reminders.
+Always answer with JSON: {"reply": "...", "actions": [...]}
+"reply" is what you say to them, in your own words: 1-3 short, warm sentences.
+"actions" are things to do in the app right now, or [] if none. Never say you did something without its action. Dates YYYY-MM-DD, times HH:MM (24h).
+Not a doctor, lawyer, or therapist; in a crisis, point to 988 or local emergency help.`;
+  // Worked examples: small models copy the pattern far better than they follow rules.
+  const PHONE_EXAMPLES = [
+    ["Hi Grandma!", { reply: "Well hello there, sweetheart! What can I help you with today?", actions: [] }],
+    ["Add laundry and dishes to my chores", { reply: "Done! Laundry and dishes are on your list. One thing at a time, dear.", actions: [{ name: "add_tasks", arguments: { tasks: [{ title: "Do the laundry" }, { title: "Wash the dishes" }] } }] }],
+    ["We need milk and eggs", { reply: "I put milk and eggs on your grocery list.", actions: [{ name: "add_grocery_items", arguments: { items: [{ name: "Milk" }, { name: "Eggs" }] } }] }],
+  ];
+  const phoneExamples = (toolNames) =>
+    PHONE_EXAMPLES.filter(([, a]) => a.actions.every((x) => toolNames.includes(x.name))).flatMap(([q, a]) => [
+      { role: "user", content: q },
+      { role: "assistant", content: JSON.stringify(a) },
+    ]);
   const T_STR = { type: "string" };
   const T_DATE = { type: "string", format: "date" };
   const T_TIME = { type: "string", format: "time" };
@@ -391,31 +418,31 @@ You're not a doctor, lawyer, or therapist. In a crisis, point to 988 (US) or loc
   const obj = (properties, required) => ({ type: "object", properties, required });
   const PHONE_TOOLS = {
     add_tasks: {
-      doc: 'add_tasks {"tasks":[{"title", "due_date"?, "due_time"?, "remind"?}]} — add chores, to-dos, or reminders.',
+      doc: 'add_tasks {"tasks":[{"title","due_date"?,"due_time"?,"remind"?}]} — to-dos and reminders',
       schema: obj({ tasks: { type: "array", maxItems: 6, items: obj({ title: T_STR, due_date: T_DATE, due_time: T_TIME, remind: T_BOOL }, ["title"]) } }, ["tasks"]),
     },
     update_tasks: {
-      doc: 'update_tasks {"updates":[{"task_id", "completed"?}]} — mark tasks done.',
+      doc: 'update_tasks {"updates":[{"task_id","completed"}]} — mark tasks done',
       schema: obj({ updates: { type: "array", maxItems: 6, items: obj({ task_id: T_STR, completed: T_BOOL }, ["task_id"]) } }, ["updates"]),
     },
     add_grocery_items: {
-      doc: 'add_grocery_items {"items":[{"name", "quantity"?}]} — add to the grocery list.',
+      doc: 'add_grocery_items {"items":[{"name","quantity"?}]}',
       schema: obj({ items: { type: "array", maxItems: 12, items: obj({ name: T_STR, quantity: T_STR }, ["name"]) } }, ["items"]),
     },
     create_recipe: {
-      doc: 'create_recipe {"name"} — suggest one dish; the app writes out the full recipe.',
+      doc: 'create_recipe {"name"} — suggest a dish; the app writes the recipe',
       schema: obj({ name: T_STR }, ["name"]),
     },
     add_recipe_to_grocery: {
-      doc: 'add_recipe_to_grocery {"recipe_id"} — put a recipe\'s ingredients on the grocery list.',
+      doc: 'add_recipe_to_grocery {"recipe_id"}',
       schema: obj({ recipe_id: T_STR }, ["recipe_id"]),
     },
     plan_day: {
-      doc: 'plan_day {"date", "items":[{"time", "title"}]} — plan a day.',
+      doc: 'plan_day {"date","items":[{"time","title"}]}',
       schema: obj({ date: T_DATE, items: { type: "array", maxItems: 10, items: obj({ time: T_TIME, title: T_STR }, ["time", "title"]) } }, ["date", "items"]),
     },
     remember: {
-      doc: 'remember {"category", "fact"} — save a lasting preference.',
+      doc: 'remember {"category","fact"} — lasting preferences only',
       schema: obj({ category: { type: "string", enum: ["name", "likes", "dislikes", "diet", "skill", "routine", "household", "style", "other"] }, fact: T_STR }, ["category", "fact"]),
     },
   };
@@ -481,6 +508,59 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     return g.build(`${g.lit('{"reply":')} string ${g.lit(',"actions":')} ${actions} "}"`);
   };
 
+  /* A few short lines about the app — only what this message is likely to need. */
+  function phoneContext(system, text) {
+    const now = new Date();
+    const t = String(text || "").toLowerCase();
+    const lines = [`Today: ${now.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}, ${now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })} (${U.today()}).`];
+    const name = Store.doc("profile").name;
+    if (name) lines.push(`Their name: ${name}.`);
+    if (Store.doc("settings").memoryEnabled) {
+      const facts = Store.list("memory").map((m) => m.fact).slice(-6);
+      if (facts.length) lines.push(`You remember: ${facts.join("; ").slice(0, 240)}.`);
+    }
+    if (/task|chore|to-?do|done|finish|complete|remind|clean/.test(t)) {
+      const open = Store.allTasks().filter((x) => !x.completed).slice(0, 6);
+      lines.push(open.length ? `Open tasks (id title): ${open.map((x) => `${x.id} ${x.title}`).join("; ")}.` : "No open tasks.");
+    }
+    if (/grocer|shopping|buy|store|list|need/.test(t)) {
+      const g = Store.list("grocery").filter((x) => !x.checked).slice(0, 8).map((x) => x.name);
+      lines.push(g.length ? `Grocery list: ${g.join(", ")}.` : "The grocery list is empty.");
+    }
+    const shown = ((system[1] && system[1].text) || "").match(/Recipes shown in this conversation[^:]*: ([^\n]*)/);
+    if (shown && /recipe|ingredient|grocer|list|that|this|\bit\b/.test(t)) {
+      lines.push(`Recipes shown above (id name): ${shown[1].split("; ").slice(-2).map((x) => x.split(" | ").slice(0, 2).join(" ")).join("; ")}.`);
+    }
+    return lines.join("\n");
+  }
+
+  /* On phones, a classic Grandma already knows beats a minute of writing. */
+  function recipeBoxMatch(name) {
+    const words = (x) => new Set((String(x).toLowerCase().match(/[a-z]{3,}/g) || []).filter((w) => !["and", "the", "with", "grandma", "easy", "classic", "homemade", "best", "simple", "recipe"].includes(w)).map((w) => w.replace(/s$/, "")));
+    const want = words(name);
+    if (!want.size) return null;
+    const box = [...(window.GA_SEED_RECIPES || []), ...Store.list("recipes").filter((r) => r.saved)];
+    let best = null;
+    for (const r of box) {
+      const have = words(r.name);
+      const hit = [...want].filter((w) => have.has(w)).length;
+      if (hit === want.size || (hit === have.size && hit >= 2)) {
+        if (!best || hit > best.hit) best = { r, hit };
+      }
+    }
+    return best ? best.r : null;
+  }
+
+  /* Read Grandma's (unchanging) instructions right after loading, so the first message only reads itself. */
+  function warmUp(eng) {
+    try {
+      const tools = GA.AI.toolsFor().filter((t) => PHONE_TOOLS[t.name]);
+      toMessages(GA.AI.systemPrompt({}), [{ role: "user", content: "Hi" }], tools, false, true)
+        .then((messages) => generate({ messages, temperature: 0, max_tokens: 1, grammar: 'root ::= "{"' }))
+        .catch(() => {});
+    } catch (e) { /* warm-up is only a head start */ }
+  }
+
   const SECTIONS = ["produce", "meat", "dairy", "pantry", "other"];
   const RECIPE_SCHEMA = {
     type: "object",
@@ -512,9 +592,9 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     properties: {
       ...RECIPE_SCHEMA.properties,
       categories: { ...RECIPE_SCHEMA.properties.categories, maxItems: 2 },
-      ingredients: { ...RECIPE_SCHEMA.properties.ingredients, maxItems: 12 },
-      steps: { ...RECIPE_SCHEMA.properties.steps, maxItems: 8 },
-      tips: { ...RECIPE_SCHEMA.properties.tips, maxItems: 2 },
+      ingredients: { ...RECIPE_SCHEMA.properties.ingredients, maxItems: 10 },
+      steps: { ...RECIPE_SCHEMA.properties.steps, maxItems: 6 },
+      tips: { ...RECIPE_SCHEMA.properties.tips, maxItems: 1 },
     },
   };
 
@@ -527,7 +607,7 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
         { role: "user", content: `Write a recipe for: ${request}\nServings: ${servings || 4}${prefs ? "\nAbout this cook:\n" + prefs : ""}` },
       ],
       temperature: 0.6,
-      max_tokens: backend && backend.kind === "cpu" ? 900 : 1500,
+      max_tokens: backend && backend.kind === "cpu" ? 650 : 1500,
       schema: backend && backend.kind === "cpu" ? PHONE_RECIPE_SCHEMA : RECIPE_SCHEMA,
     }, { signal });
     return parseJSON(res.text);
@@ -557,11 +637,10 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     const tone = ((system[0] && system[0].text) || "").match(/Tone for this person:[^\n]*/);
     const { history, context: contextChars } = budget(tight);
     const rawContext = ((system[1] && system[1].text) || "").slice(0, contextChars);
-    const context = ((system[1] && system[1].text) || "").replace(/^Current app context[^\n]*\n+/, "").slice(0, contextChars);
     // Phone versions: the system prompt never changes, so the engine can reuse
     // its work from earlier messages; today's details ride along with the newest message.
     const sys = phone
-      ? [PHONE_PROMPT, tone ? tone[0] : "", tools.length ? "Actions:\n" + tools.map((t) => "- " + PHONE_TOOLS[t.name].doc).join("\n") : "Use actions: [] this time."].filter(Boolean).join("\n\n")
+      ? [PHONE_PROMPT, tone ? "Tone: " + tone[0].replace(/^Tone for this person:\s*/, "").split(".")[0] + "." : "", tools.length ? "Actions:\n" + tools.map((t) => "- " + PHONE_TOOLS[t.name].doc).join("\n") : "Use actions: [] this time."].filter(Boolean).join("\n\n")
       : [LOCAL_PROMPT, tone ? tone[0] : "", tools.length ? "Actions you can use:\n" + toolDocs(tools) : "Answer with actions: [] this time.", rawContext].filter(Boolean).join("\n\n");
 
     const lastUser = messages.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop();
@@ -573,7 +652,7 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
       else if (m.role === "assistant") {
         const said = m.content.filter((b) => b.type === "text" && b.text !== "…").map((b) => b.text).join("\n");
         const did = m.content.filter((b) => b.type === "tool_use").map((b) => b.name);
-        text = JSON.stringify({ reply: said, actions: did.map((n) => ({ name: n, arguments: {} })) });
+        text = JSON.stringify({ reply: phone ? said.slice(0, 200) : said, actions: did.map((n) => ({ name: n, arguments: {} })) });
       } else {
         if (m.content.every((b) => b.type === "tool_result")) continue;
         const parts = [];
@@ -595,16 +674,27 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
       if (prev && prev.role === role) prev.content += "\n\n" + text;
       else out.push({ role, content: text });
     }
+    if (phone) {
+      // Phone brains read slowly: send the newest message, plus the exchange
+      // before it only when the message leans on it ("yes", "add that", …).
+      let i = out.length - 1;
+      while (i >= 0 && out[i].role !== "user") i--;
+      const examples = phoneExamples(tools.map((t) => t.name));
+      if (i < 0) return [{ role: "system", content: sys }, ...examples];
+      const last = out[i];
+      const leansOnEarlier = !tight && (last.content.length < 40 || /\b(it|that|this|those|them|yes|yeah|yep|sure|ok(ay)?|please|another|more|again|instead|same)\b/i.test(last.content));
+      const before = leansOnEarlier ? out.slice(Math.max(0, i - 2), i) : [];
+      const context = phoneContext(system, last.content);
+      const msgs = [...before.map((m) => ({ ...m, content: m.role === "user" ? m.content.slice(0, 300) : m.content })), { role: "user", content: `(${context})\n\n${last.content}` }];
+      while (msgs.length > 1 && msgs[0].role !== "user") msgs.shift();
+      return [{ role: "system", content: sys }, ...examples, ...msgs];
+    }
     // Keep the most recent turns that fit.
     let used = 0;
     let start = out.length;
     while (start > 0 && used + out[start - 1].content.length < history) used += out[--start].content.length;
     let recent = out.slice(Math.min(start, out.length - 1));
     while (recent.length && recent[0].role !== "user") recent = recent.slice(1);
-    if (phone && context && recent.length) {
-      const lastMsg = recent[recent.length - 1];
-      recent = [...recent.slice(0, -1), { ...lastMsg, content: `(In the app now — ${U.today()}:\n${context})\n\n${lastMsg.content}` }];
-    }
     return [{ role: "system", content: sys }, ...recent];
   }
 
@@ -646,7 +736,9 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     const schema = responseSchema(tools.length ? tools : [{ name: "none" }]);
     const grammar = phone ? chatGrammar(tools.map((t) => t.name)) : undefined;
     let shown = "";
+    if (phone) setActivity("Grandma is reading your message — phones take a little longer…");
     const onDelta = (text) => {
+      if (activity) setActivity("");
       const r = partialReply(text);
       if (r && r !== shown) {
         shown = r;
@@ -660,6 +752,8 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     } catch (e) {
       if (e.kind !== "brain-context") throw e;
       res = await ask(true); // long conversation: try again with just the latest message
+    } finally {
+      if (activity) setActivity("");
     }
     const raw = res.text;
     const finish = res.finish;
@@ -670,7 +764,12 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
       return { content: text ? [{ type: "text", text }] : [], stop_reason: finish === "length" ? "max_tokens" : "end_turn" };
     }
     const names = new Set(tools.map((t) => t.name));
-    const actions = (Array.isArray(j.actions) ? j.actions : []).filter((a) => a && names.has(a.name));
+    let actions = (Array.isArray(j.actions) ? j.actions : []).filter((a) => a && names.has(a.name));
+    if (phone) {
+      // Writing a recipe takes a phone a while: one dish per answer.
+      let dishes = 0;
+      actions = actions.filter((a) => a.name !== "create_recipe" || dishes++ === 0);
+    }
 
     // They clearly asked for a recipe but the model only talked about it.
     const userText = typeof last.content === "string" ? last.content : (last.content || []).filter((b) => b.type === "text").map((b) => b.text).join(" ");
@@ -681,6 +780,11 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     for (const a of actions) {
       if (a.name !== "create_recipe" || GA.Kitchen.normalize(a.arguments) || GA.Plans.recipeGensLeft() <= 0) continue;
       const args = a.arguments || {};
+      const known = phone && recipeBoxMatch(args.name || "");
+      if (known) {
+        a.arguments = { ...known, id: undefined, save: false };
+        continue;
+      }
       const request = [args.name, args.notes, `(They said: "${userText.slice(0, 300)}")`].filter(Boolean).join(". ");
       setActivity("Writing out the full recipe…");
       try {
