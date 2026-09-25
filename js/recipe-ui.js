@@ -8,17 +8,18 @@
   const { U, Store } = GA;
 
   const TILE = {
-    Breakfast: "#f8e1b8", Dinner: "#f3cfc0", Desserts: "#f5d3dc", Baking: "#efdcc4", "Comfort Food": "#f1d6c2",
+    Breakfast: "#f8e1b8", Lunch: "#e6ecd0", Dinner: "#f3cfc0", Desserts: "#f5d3dc", Baking: "#efdcc4", "Comfort Food": "#f1d6c2",
     Southern: "#f0dcb4", Italian: "#e3e8c6", Mexican: "#f6d2b4", "American Classics": "#dde3ef",
   };
   const tileColor = (r) => TILE[(r.categories || [])[0]] || "#f3d7c8";
-  const totalTime = (r) => (r.prepMinutes || 0) + (r.cookMinutes || 0);
+  const totalTime = (r) => GA.Kitchen.totalMinutes(r);
   const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)} hr${m % 60 ? " " + (m % 60) + " min" : ""}` : `${m} min`);
 
   function meta(r) {
     const bits = [];
     if (totalTime(r)) bits.push(`<span>${U.icon("clock")}${fmtMin(totalTime(r))}</span>`);
     bits.push(`<span>${U.icon("users")}${r.servings} serving${r.servings === 1 ? "" : "s"}</span>`);
+    if (r.cuisine) bits.push(`<span>🌍 ${U.esc(r.cuisine)}</span>`);
     if (r.difficulty) bits.push(`<span>${U.icon("flame")}${U.esc(r.difficulty)}</span>`);
     return `<div class="meta">${bits.join("")}</div>`;
   }
@@ -40,7 +41,8 @@
     const ings = r.ingredients
       .map((i) => `<li><span class="q">${U.esc(GA.Kitchen.qtyText(i, f)) || "—"}</span><span>${U.esc(i.item)}</span></li>`)
       .join("");
-    const steps = r.steps.map((s) => `<li><span>${U.esc(s)}</span></li>`).join("");
+    const mins = r.stepMinutes || [];
+    const steps = r.steps.map((s, i) => `<li><span>${U.esc(s)}${mins[i] > 0 ? ` <small class="step-min">${U.icon("timer")}${fmtMin(mins[i])}</small>` : ""}</span></li>`).join("");
     const tips = (r.tips || []).map((t) => `<div class="tip"><b>Grandma's Tip ❤️</b>${U.esc(t)}</div>`).join("");
     const scaled = r.servings !== r.baseServings ? ` <small class="muted" style="text-transform:none;letter-spacing:0">(${r.servings > r.baseServings ? "scaled up" : "scaled down"} from ${r.baseServings})</small>` : "";
     return `
@@ -236,6 +238,9 @@
       const text = r.steps[s.step];
       const pct = Math.round(((s.step + 1) / r.steps.length) * 100);
       const suggestions = Cook.timersIn(text);
+      // The step's own time, when the recipe has one and the text didn't already offer it.
+      const own = (r.stepMinutes || [])[s.step];
+      if (own > 0 && !suggestions.some((t) => t.minutes === own)) suggestions.unshift({ minutes: own, label: fmtMin(own) });
       el.innerHTML = `
         <div class="cook-top">
           <button class="icon-btn" data-cook="close" aria-label="Exit cooking mode">${U.icon("x")}</button>
@@ -245,7 +250,7 @@
         </div>
         <div class="cook-progress"><i style="width:${pct}%"></i></div>
         <div class="cook-main">
-          <div class="cook-step-num">Step ${s.step + 1} of ${r.steps.length}</div>
+          <div class="cook-step-num">Step ${s.step + 1} of ${r.steps.length}${(r.stepMinutes || [])[s.step] > 0 ? ` · about ${fmtMin(r.stepMinutes[s.step])}` : ""}</div>
           <div class="cook-step">${U.esc(text)}</div>
           <div class="cook-timers">
             ${suggestions.map((t) => `<button class="timer-chip" data-cook="timer" data-min="${t.minutes}" data-label="${U.esc(t.label)}">${U.icon("timer")}Start ${U.esc(t.label)} timer</button>`).join("")}

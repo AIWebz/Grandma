@@ -893,3 +893,20 @@ button.nav-item { width: 100%; border: 0; background: none; font: inherit; color
 .install-steps li { display: flex; gap: 12px; align-items: flex-start; line-height: 1.45; }
 .install-steps .n { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--ink-text, #fff); font-weight: 600; font-size: 14px; }
 .inline-ico { width: 18px; height: 18px; vertical-align: -3px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.step-min { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2, rgba(0,0,0,.05)); color: var(--muted); font-size: 12.5px; white-space: nowrap; vertical-align: 1px; }
+.step-min svg { width: 13px; height: 13px; }
+
+/* ---------- Plan my day: "what's happening?" ---------- */
+.events-form .setup-hero { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.events-form .setup-hero p { margin: 0; }
+.event-rows { display: grid; gap: 8px; margin-bottom: 8px; }
+.event-row { display: flex; gap: 8px; align-items: center; }
+.event-row .select { width: auto; flex: none; }
+.event-row input[type="time"] { width: 148px; flex: none; }
+.event-row .grow { flex: 1; min-width: 0; }
+.meal-picks { border: 0; padding: 0; margin: 14px 0 4px; display: flex; flex-wrap: wrap; gap: 14px; }
+.meal-picks legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
+.meal-picks .chk { display: inline-flex; gap: 6px; align-items: center; }
+.plan-ask { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 480px) { .event-row { flex-wrap: wrap; } .event-row .grow { flex-basis: 100%; order: 3; } }

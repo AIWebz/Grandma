@@ -52,7 +52,7 @@
   /* ---------------- recipes ---------------- */
   const seedList = () => window.GA_SEED_RECIPES || [];
   const SECTIONS = ["produce", "meat", "dairy", "pantry", "other"];
-  const RECIPE_CATS = ["Breakfast", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"];
+  const RECIPE_CATS = ["Breakfast", "Lunch", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"];
   const VULGAR = { "½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125 };
   const toNumber = (v) => {
     if (typeof v === "number") return isFinite(v) ? v : null;
@@ -159,15 +159,28 @@
         .map((i) => ({ ...i, qty: i.qty > 0 ? i.qty : null, section: SECTIONS.includes(i.section) ? i.section : Grocery.guessSection(i.item) }));
       let steps = input.steps || input.instructions || [];
       if (typeof steps === "string") steps = steps.split(/\n+|(?<=\.)\s+(?=\d+[.)]\s)/);
-      steps = (Array.isArray(steps) ? steps : []).map((x) => String(typeof x === "object" ? x.text || x.step || "" : x).replace(/^\s*(step\s*)?\d+[.):-]\s*/i, "").trim()).filter(Boolean);
+      // Steps may be plain text or {text, minutes}; keep each step's minutes alongside.
+      const given = Array.isArray(input.stepMinutes) ? input.stepMinutes : Array.isArray(input.step_minutes) ? input.step_minutes : [];
+      const stepList = (Array.isArray(steps) ? steps : [])
+        .map((x, i) => ({
+          text: String(typeof x === "object" && x ? x.text || x.step || x.instruction || "" : x).replace(/^\s*(step\s*)?\d+[.):-]\s*/i, "").trim(),
+          minutes: toNumber(typeof x === "object" && x ? (x.minutes != null ? x.minutes : x.time) : given[i]),
+        }))
+        .filter((x) => x.text);
+      steps = stepList.map((x) => x.text);
+      const stepMinutes = stepList.map((x) => (x.minutes >= 0 && x.minutes <= 600 ? Math.round(x.minutes) : null));
       if (!name || ingredients.length < 2 || !steps.length) return null;
       const int = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) : d);
       const tips = (Array.isArray(input.tips) ? input.tips : input.tips ? [input.tips] : []).map(String).map((t) => t.trim()).filter(Boolean).slice(0, 3);
+      const categories = (input.categories || []).filter((c) => RECIPE_CATS.includes(c));
+      const cuisine = String(input.cuisine || "").trim().slice(0, 30) || (categories.find((c) => ["Italian", "Mexican", "Southern"].includes(c)) || (categories.includes("American Classics") ? "American" : ""));
       return {
         name: name.charAt(0).toUpperCase() + name.slice(1),
         description: String(input.description || "").trim(),
+        cuisine,
+        stepMinutes: stepMinutes.some((m) => m != null) ? stepMinutes : [],
         emoji: typeof input.emoji === "string" && input.emoji.trim() && input.emoji.trim().length <= 4 ? input.emoji.trim() : "🍲",
-        categories: (input.categories || []).filter((c) => RECIPE_CATS.includes(c)),
+        categories,
         servings: Math.max(1, int(input.servings, 4) || 4),
         prepMinutes: int(input.prep_minutes != null ? input.prep_minutes : input.prepMinutes, 0),
         cookMinutes: int(input.cook_minutes != null ? input.cook_minutes : input.cookMinutes, 0),
@@ -211,6 +224,28 @@
     },
 
     /* No AI available: find the closest built-in recipes to what they typed. */
+    /* How long a recipe really takes: the larger of prep + cook and its step times. */
+    totalMinutes(r) {
+      const stated = (r.prepMinutes || 0) + (r.cookMinutes || 0);
+      const steps = (r.stepMinutes || []).reduce((a, m) => a + (m || 0), 0);
+      return Math.max(stated, steps);
+    },
+
+    /*
+     * A time limit in what someone asked for: "a 10 minute recipe",
+     * "dinner in 20 minutes", "under half an hour", "quick 15-min lunch".
+     */
+    timeLimit(text) {
+      const t = String(text || "").toLowerCase();
+      if (/half an hour|half-hour|30-?ish/.test(t)) return 30;
+      if (/\b(an|one) hour\b/.test(t) && !/\d/.test(t)) return 60;
+      const h = t.match(/(\d+(?:\.\d+)?)\s*-?\s*(?:hours?|hrs?)\b/);
+      const m = t.match(/(\d{1,3})\s*-?\s*(?:minutes?|mins?|min)\b/);
+      if (!h && !m) return 0;
+      const total = (h ? Math.round(Number(h[1]) * 60) : 0) + (m ? Number(m[1]) : 0);
+      return total >= 3 && total <= 600 ? total : 0;
+    },
+
     findSimilar(text, n = 3) {
       const words = String(text).toLowerCase().match(/[a-z]{3,}/g) || [];
       const stop = new Set(["have", "with", "some", "and", "the", "for", "make", "want", "what", "can", "something", "dinner", "lunch", "breakfast", "recipe", "got", "that", "this", "use"]);
@@ -395,6 +430,8 @@
       for (const id of input.remove_ids || []) Store.remove("plan", id);
       const items = (input.items || []).filter((i) => i && i.title && U.isValidTime(i.time));
       const made = items.length ? Store.addMany("plan", items.map((i) => ({ date: input.date, time: i.time, title: i.title.trim(), durationMin: i.duration_minutes || 0, recipeId: i.recipe_id && Kitchen.get(i.recipe_id) ? i.recipe_id : "", done: false }))) : [];
+      // A whole-day plan gets breakfast, lunch, and dinner with Grandma's recipe picks.
+      if ((input.meals || input.mode === "replace") && GA.Planner && !items.some((i) => /breakfast|lunch|dinner|supper/i.test(i.title))) GA.Planner.addMeals(input.date);
       return { result: { date: input.date, items: made.map((p) => ({ id: p.id, time: p.time, title: p.title })) }, card: { type: "plan", date: input.date } };
     },
 

@@ -63,11 +63,7 @@
         date = day.dataset.day === "today" ? U.today() : U.addDays(date, Number(day.dataset.day));
         return render(root);
       }
-      if (e.target.closest("[data-plan-ai]")) {
-        const when = date === U.today() ? "today" : U.parseKey(date).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) + ` (${date})`;
-        GA.App.askGrandma(itemsFor(date).length ? `Can you help me rearrange my plan for ${when}?` : `Plan my day for ${when}.`);
-        return;
-      }
+      if (e.target.closest("[data-plan-ai]")) return askEvents({ scope: "day", date });
       if (e.target.closest("[data-meal-plan]")) {
         if (!GA.Plans.gate("mealPlan", "Weekly meal planning")) return;
         const offerList = () => U.toast("Your week of dinners is planned ❤️", { ms: 6000, action: { label: "Make grocery list", run: () => { const n = GA.Planner.groceryFromPlan(); U.toast(`Added ${n} items to your grocery list`); } } });
@@ -76,11 +72,7 @@
         if (!res.writing) offerList();
         return render(root);
       }
-      if (e.target.closest("[data-week-plan]")) {
-        if (!GA.Plans.gate("weekPlan", "Whole-week planning")) return;
-        GA.App.askGrandma(`Plan my whole week, starting today (${U.today()}). Use plan_day once for each of the next 7 days with a simple, realistic schedule: meals, chores spread across the week, and some rest. Keep what's already planned.`);
-        return;
-      }
+      if (e.target.closest("[data-week-plan]")) return askEvents({ scope: "week", date: U.today() });
       if (e.target.closest("[data-plan-done]")) return;
       const ed = e.target.closest("[data-plan-edit]");
       if (ed) edit(ed.dataset.planEdit);
@@ -163,6 +155,165 @@
     }
   }
 
+  /* ================= Plan my day / week =================
+   * Grandma asks what's happening first, then fits breakfast, lunch, and dinner
+   * around those events and picks a recipe for each meal: nothing she already
+   * picked this week, nothing they're allergic to or dislike, and something
+   * quick on busy days.
+   */
+  const MEALS = [
+    { key: "breakfast", label: "Breakfast", time: "08:00", window: ["07:00", "10:00"], skip: /breakfast|brunch/i },
+    { key: "lunch", label: "Lunch", time: "12:30", window: ["11:00", "14:00"], skip: /lunch|brunch/i },
+    { key: "dinner", label: "Dinner", time: "18:30", window: ["17:00", "20:30"], skip: /dinner|supper|potluck|restaurant|eat(ing)? out|cookout|barbecue|bbq/i },
+  ];
+  const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const toTime = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+  const LUNCHY = /soup|sandwich|salad|wrap|taco|quesadilla|grilled cheese|chili|burger|melt|bowl|noodle/i;
+
+  function poolFor(meal, rules) {
+    const all = GA.Kitchen.all().filter((r) => !r.ingredients.some((i) => rules.avoid.some((w) => i.item.toLowerCase().includes(w))) && !(rules.veg && r.ingredients.some((i) => i.section === "meat" || MEAT.test(i.item))));
+    const cats = (r) => r.categories || [];
+    if (meal === "breakfast") return all.filter((r) => cats(r).includes("Breakfast"));
+    if (meal === "lunch") return all.filter((r) => cats(r).includes("Lunch") || (LUNCHY.test(r.name) && !cats(r).some((c) => ["Desserts", "Baking", "Breakfast"].includes(c)) && GA.Kitchen.totalMinutes(r) <= 45));
+    return all.filter((r) => fits(r, rules));
+  }
+
+  /* Grandma's pick for one meal. */
+  function pickRecipe(meal, rules, used, maxMinutes) {
+    const pool = poolFor(meal, rules);
+    const fresh = pool.filter((r) => !used.has(r.name));
+    const quick = (list) => (maxMinutes ? list.filter((r) => GA.Kitchen.totalMinutes(r) <= maxMinutes) : list);
+    const ranked = (list) => list.map((r) => ({ r, score: (GA.Kitchen.isSaved(r.id) ? 2 : 0) + Math.random() * 1.5 })).sort((a, b) => b.score - a.score).map((x) => x.r);
+    const choice = ranked(quick(fresh))[0] || ranked(fresh)[0] || ranked(quick(pool))[0] || ranked(pool)[0] || null;
+    if (choice) used.add(choice.name);
+    return choice;
+  }
+
+  /* A free time for a meal near its usual time, clear of the day's events. */
+  function mealTime(meal, busy) {
+    const [from, to] = meal.window.map(toMin);
+    const clear = (m) => busy.every(([s, e]) => m + 30 <= s || m >= e);
+    const start = toMin(meal.time);
+    for (let d = 0; d <= to - from; d += 15) {
+      for (const m of [start + d, start - d]) if (m >= from && m <= to && clear(m)) return toTime(m);
+    }
+    return null;
+  }
+
+  /*
+   * Add breakfast, lunch, and dinner to a day around what's already on it.
+   * Returns how many meals were added. Meals the events already cover
+   * ("dinner at Mom's") are skipped.
+   */
+  function addMeals(day, { rules = mealRules(), used = new Set(), which = ["breakfast", "lunch", "dinner"] } = {}) {
+    Store.list("plan").filter((p) => p.date === day && p.autoMeal).forEach((p) => Store.remove("plan", p.id));
+    const items = itemsFor(day);
+    const busy = items.map((p) => [toMin(p.time), toMin(p.time) + (p.durationMin || 60)]);
+    const busyEvening = items.some((p) => toMin(p.time) >= 15 * 60 && toMin(p.time) < 19 * 60);
+    const packed = items.length >= 3;
+    let added = 0;
+    for (const meal of MEALS) {
+      if (!which.includes(meal.key) || items.some((p) => meal.skip.test(p.title))) continue;
+      const time = mealTime(meal, busy);
+      if (!time) continue;
+      const quickFor = meal.key === "breakfast" ? 20 : meal.key === "lunch" ? 25 : busyEvening || packed ? 35 : 0;
+      const r = pickRecipe(meal.key, rules, used, quickFor);
+      Store.add("plan", {
+        date: day,
+        time,
+        title: r ? `${meal.label}: ${r.name}` : meal.label,
+        durationMin: r ? Math.min(GA.Kitchen.totalMinutes(r), 90) || 30 : 30,
+        recipeId: r ? r.id : "",
+        autoMeal: true,
+        mealPlan: meal.key === "dinner",
+        done: false,
+      });
+      busy.push([toMin(time), toMin(time) + 30]);
+      added++;
+    }
+    return added;
+  }
+
+  /* Put their events on the calendar, then the meals. */
+  function buildPlan(days, events, which) {
+    const rules = mealRules();
+    const used = new Set();
+    for (const day of days) {
+      for (const ev of events.filter((x) => x.date === day)) {
+        Store.add("plan", { date: day, time: ev.time, title: ev.title, durationMin: ev.duration || 60, event: true, done: false });
+      }
+      addMeals(day, { rules, used, which });
+    }
+  }
+
+  /* "What's happening?" — the question Grandma asks before planning. */
+  const daysFor = (scope, start) => (scope === "week" ? Array.from({ length: 7 }, (_, i) => U.addDays(start, i)) : [start]);
+  /* Free plans look a couple of days ahead; whole weeks are a Pro perk. */
+  function allowed(scope, days) {
+    if (scope === "week") return GA.Plans.gate("weekPlan", "Whole-week planning");
+    const ahead = Math.round((U.parseKey(days[days.length - 1]) - U.parseKey(U.today())) / 86400000);
+    return ahead < GA.Plans.limit("planDays") || GA.Plans.gate("weekPlan", `Planning ${ahead + 1} days ahead`);
+  }
+
+  /* "Nothing special": plan the meals right away. */
+  function planNow({ scope = "day", date: startDate = U.today(), onPlanned } = {}) {
+    const days = daysFor(scope, startDate);
+    if (!allowed(scope, days)) return false;
+    buildPlan(days, [], MEALS.map((m) => m.key));
+    if (onPlanned) onPlanned({ days, events: [] });
+    return true;
+  }
+
+  function askEvents({ scope = "day", date: startDate = U.today(), onPlanned } = {}) {
+    const days = daysFor(scope, startDate);
+    if (!allowed(scope, days)) return;
+    const dayName = (d) => (d === U.today() ? "Today" : d === U.addDays(U.today(), 1) ? "Tomorrow" : U.parseKey(d).toLocaleDateString(undefined, { weekday: "long" }));
+    const row = () => `<div class="event-row">
+        ${scope === "week" ? `<select class="select" name="day" aria-label="Day">${days.map((d) => `<option value="${d}">${U.esc(dayName(d))}</option>`).join("")}</select>` : ""}
+        <input class="input" type="time" name="time" aria-label="Time" value="09:00">
+        <input class="input grow" name="title" placeholder="${scope === "week" ? "Soccer practice, work, doctor…" : "Dentist, work, pick up kids…"}" aria-label="Event" maxlength="80">
+        <button type="button" class="icon-btn" data-row-remove aria-label="Remove">${U.icon("x")}</button>
+      </div>`;
+    U.openSheet({
+      title: scope === "week" ? "Let's plan your week" : `Let's plan ${dayName(startDate).toLowerCase() === "today" ? "your day" : dayName(startDate)}`,
+      body: `<form id="events-form" class="events-form">
+          <div class="setup-hero">${U.avatar(48)}<p>${scope === "week" ? "What's happening this week, sweetheart?" : "What's happening, sweetheart?"} Tell me about appointments, work, practices, or plans, and I'll fit breakfast, lunch, and dinner around them with recipes I pick for you.</p></div>
+          <div class="event-rows">${row()}</div>
+          <button type="button" class="btn ghost small" data-row-add>${U.icon("plus")}Add another</button>
+          <fieldset class="meal-picks"><legend>Plan these meals</legend>
+            ${MEALS.map((m) => `<label class="chk"><input type="checkbox" name="meal" value="${m.key}" checked> ${m.label}</label>`).join("")}
+          </fieldset>
+          <div class="sheet-actions split"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">${U.icon("sparkle")}Plan it</button></div>
+        </form>`,
+      onMount(sheet, close) {
+        const f = sheet.querySelector("#events-form");
+        const rows = f.querySelector(".event-rows");
+        f.addEventListener("click", (e) => {
+          if (e.target.closest("[data-row-add]")) {
+            rows.insertAdjacentHTML("beforeend", row());
+            rows.lastElementChild.querySelector("[name=title]").focus();
+          }
+          const rm = e.target.closest("[data-row-remove]");
+          if (rm) rm.closest(".event-row").remove();
+        });
+        f.onsubmit = (e) => {
+          e.preventDefault();
+          const events = [...f.querySelectorAll(".event-row")]
+            .map((r) => ({ date: r.querySelector("[name=day]") ? r.querySelector("[name=day]").value : startDate, time: r.querySelector("[name=time]").value, title: r.querySelector("[name=title]").value.trim() }))
+            .filter((x) => x.title && U.isValidTime(x.time));
+          const which = [...f.querySelectorAll("[name=meal]:checked")].map((x) => x.value);
+          buildPlan(days, events, which);
+          close();
+          date = startDate;
+          const grocery = GA.Plans.can("autoGrocery") ? { label: "Make grocery list", run: () => U.toast(`Added ${groceryFromPlan(days.length)} items to your grocery list`) } : undefined;
+          U.toast(scope === "week" ? "Your week is planned ❤️" : "Your day is planned ❤️", { ms: 6000, action: grocery });
+          if (onPlanned) onPlanned({ days, events });
+          else GA.App.go("planner");
+        };
+      },
+    });
+  }
+
   /* Grandma+ automatic grocery list from the next week's planned recipes. */
   function groceryFromPlan(days = 7) {
     const end = U.addDays(U.today(), days - 1);
@@ -171,7 +322,7 @@
     ids.forEach((id) => (n += GA.Kitchen.addToGrocery(id).length));
     return n;
   }
-  GA.Planner = { mealPlan, groceryFromPlan };
+  GA.Planner = { mealPlan, groceryFromPlan, askEvents, planNow, addMeals, buildPlan };
 
   function nextSlot(items) {
     const last = items[items.length - 1];

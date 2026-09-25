@@ -573,7 +573,7 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
       prep_minutes: { type: "integer" },
       cook_minutes: { type: "integer" },
       difficulty: { type: "string", enum: ["Easy", "Medium", "Hard"] },
-      categories: { type: "array", items: { type: "string", enum: ["Breakfast", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"] } },
+      categories: { type: "array", items: { type: "string", enum: ["Breakfast", "Lunch", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"] } },
       ingredients: {
         type: "array",
         items: {
@@ -582,10 +582,14 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
           required: ["qty", "unit", "item", "section"],
         },
       },
-      steps: { type: "array", items: { type: "string" } },
+      cuisine: { type: "string" },
+      steps: {
+        type: "array",
+        items: { type: "object", properties: { text: { type: "string" }, minutes: { type: "integer" } }, required: ["text", "minutes"] },
+      },
       tips: { type: "array", items: { type: "string" } },
     },
-    required: ["name", "description", "emoji", "servings", "prep_minutes", "cook_minutes", "difficulty", "categories", "ingredients", "steps", "tips"],
+    required: ["name", "description", "emoji", "cuisine", "servings", "prep_minutes", "cook_minutes", "difficulty", "categories", "ingredients", "steps", "tips"],
   };
   // Phone versions write a slightly shorter recipe so it's ready sooner.
   const PHONE_RECIPE_SCHEMA = {
@@ -601,6 +605,7 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
 
   /* Write one full recipe with the engine enforcing the recipe shape. */
   async function recipe({ request, prefs, servings, signal }) {
+    // Each step carries its minutes; see Kitchen.normalize.
     await load();
     const res = await generate({
       messages: [
@@ -779,17 +784,22 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     }
     // Write each suggested dish out as a full recipe (strict shape).
     for (const a of actions) {
-      if (a.name !== "create_recipe" || GA.Kitchen.normalize(a.arguments) || GA.Plans.recipeGensLeft() <= 0) continue;
+      if (a.name !== "create_recipe" || GA.Plans.recipeGensLeft() <= 0) continue;
+      // A time limit they asked for ("a 10 minute recipe") has to hold.
+      const limit = GA.Kitchen.timeLimit(userText);
+      const fits = (r) => !limit || GA.Kitchen.totalMinutes(r) <= limit + Math.max(2, Math.round(limit * 0.1));
+      const already = GA.Kitchen.normalize(a.arguments);
+      if (already && fits(already)) continue;
       const args = a.arguments || {};
       const known = phone && recipeBoxMatch(args.name || "");
-      if (known) {
+      if (known && fits(known)) {
         a.arguments = { ...known, id: undefined, save: false };
         continue;
       }
       const request = [args.name, args.notes, `(They said: "${userText.slice(0, 300)}")`].filter(Boolean).join(". ");
       setActivity("Writing out the full recipe…");
       try {
-        const full = await recipe({ request, prefs: GA.Kitchen.prefs(), servings: args.servings || GA.Kitchen.defaultServings(), signal });
+        const full = await GA.AI.generateRecipe({ request, servings: args.servings || GA.Kitchen.defaultServings(), signal });
         if (full) a.arguments = full;
       } catch (e) {
         if (e.name === "AbortError" || e.kind === "brain-stuck") throw e;

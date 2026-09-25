@@ -101,6 +101,13 @@
             <div class="card-foot"><button class="btn small" data-route="planner" data-date="${card.date}">Open Planner</button></div>
           </div>`;
       }
+      case "plan-ask":
+        return `<div class="card">
+            <div class="card-body plan-ask">
+              <button class="btn small primary" data-plan-ask="${card.scope}" data-date="${card.date}">${U.icon("calendar")}Tell Grandma what's happening</button>
+              <button class="btn small ghost" data-plan-quick="${card.scope}" data-date="${card.date}">Nothing special, just plan it</button>
+            </div>
+          </div>`;
       case "memory": {
         const m = Store.find("memory", card.id);
         if (!m) return `<div class="card memory">${U.icon("brain")}<span class="grow muted">Forgotten.</span></div>`;
@@ -438,12 +445,59 @@
     });
   }
 
+  /*
+   * "Plan my day" / "plan my week": Grandma asks what's happening first, then
+   * fits breakfast, lunch, and dinner around it (js/views/planner.js). If they
+   * already listed times ("dentist at 3pm"), the AI plans it directly.
+   */
+  function planIntent(text) {
+    if (!/\bplan\b[^.?!]{0,30}\b(day|today|tomorrow|week|weekend)\b/i.test(text)) return null;
+    if (/\b(meals?|dinners?|menu|lunches|breakfasts)\b/i.test(text) || /\d\s*(:\d\d)?\s*(am|pm)\b|\bat \d/i.test(text)) return null;
+    return { scope: /week/i.test(text) ? "week" : "day", date: /tomorrow/i.test(text) ? U.addDays(U.today(), 1) : U.today() };
+  }
+
+  function askAboutDay(text, { scope, date }) {
+    el.input.value = "";
+    autosize();
+    if (!currentId) {
+      currentId = ensureConversation(titleFrom(text));
+      GA.App.setRoute("chat/" + currentId, { replace: true, silent: true });
+    }
+    const when = scope === "week" ? "this week" : date === U.today() ? "today" : "tomorrow";
+    const reply = `Happy to, sweetheart! First tell me what's happening ${when}: appointments, work, practices, plans with friends. I'll fit breakfast, lunch, and dinner around it and pick the recipes.`;
+    addLocalTurn(text, reply, [{ type: "plan-ask", scope, date }]);
+  }
+
+  /* A turn Grandma answers herself (no AI needed); the AI still sees it in the history. */
+  function addLocalTurn(userText, reply, cards) {
+    const conv = Store.conv(currentId);
+    const messages = (conv.messages || []).slice();
+    const api = (conv.api || []).slice();
+    if (userText) {
+      messages.push({ role: "user", text: userText, images: [], ts: Date.now() });
+      api.push({ role: "user", content: userText });
+    }
+    messages.push({ role: "grandma", text: reply, cards, ts: Date.now() });
+    api.push({ role: "assistant", content: [{ type: "text", text: reply }] });
+    Store.saveConv(currentId, { messages, api });
+    Store.update("conversations", currentId, { lastAt: Date.now() });
+    render();
+    toBottom(true);
+  }
+
+  function planned({ days }) {
+    const week = days.length > 1;
+    addLocalTurn("", week ? "Here's your week, sweetheart ❤️ Every day has breakfast, lunch, and dinner fitted around your plans. Tap a meal in the Planner to see its recipe." : "Here's your day ❤️ I fit breakfast, lunch, and dinner around your plans. Tap a meal to see its recipe.", [{ type: "plan", date: days[0] }, ...(week ? [{ type: "note", icon: "calendar", text: "The rest of your week is in the Planner.", link: { route: "planner", label: "Open Planner" } }] : [])]);
+  }
+
   async function send(textIn, { voice = false } = {}) {
     const text = (textIn != null ? textIn : el.input.value).trim();
     const imageIds = attachments.map((a) => a.id);
     if ((!text && !imageIds.length) || busy) return;
     lastInputVoice = voice;
     ephemeral = null;
+    const planning = !imageIds.length && planIntent(text);
+    if (planning) return askAboutDay(text, planning);
     const problem = preflight();
     if (problem) {
       ephemeral = { kind: problem };
@@ -598,6 +652,10 @@
     el.thread.addEventListener("click", async (e) => {
       const p = e.target.closest("[data-prompt]");
       if (p) return send(p.dataset.prompt);
+      const pa = e.target.closest("[data-plan-ask]");
+      if (pa) return GA.Planner.askEvents({ scope: pa.dataset.planAsk, date: pa.dataset.date, onPlanned: planned });
+      const pq = e.target.closest("[data-plan-quick]");
+      if (pq) return GA.Planner.planNow({ scope: pq.dataset.planQuick, date: pq.dataset.date, onPlanned: planned });
       const r = e.target.closest("[data-retry]");
       if (r) return retry(Number(r.dataset.retry));
       const c = e.target.closest("[data-copy]");

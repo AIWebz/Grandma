@@ -15,7 +15,7 @@
   const { U, Store } = GA;
   const CFG = (window.GRANDMA_CONFIG || {}).ai || {};
 
-  const RECIPE_WRITER = "You are Grandma, a wonderful home cook. Write one complete, reliable home recipe: real US measurements for every ingredient, safe cooking temperatures and times, 4-10 clear steps, and one or two short tips in a warm grandmotherly voice. Respect every allergy and dislike you're told about — never include those foods.";
+  const RECIPE_WRITER = "You are Grandma, a wonderful home cook. Write one complete, reliable home recipe: real US measurements for every ingredient, safe cooking temperatures and times, 4-10 clear steps, each with how many minutes it takes, the cuisine (e.g. Italian, Mexican, Southern, Chinese), and one or two short tips in a warm grandmotherly voice. prep_minutes + cook_minutes must match the steps honestly. Respect every allergy and dislike you're told about — never include those foods.";
   const TRANSCRIBER = "You are Grandma AI's careful recipe transcriber. Preserve the family's original wording, amounts, and quirks; don't modernize or 'correct' the recipe. If something is illegible, write [unclear] rather than guessing.";
   const MAX_TOOL_ROUNDS = 6;
   const HISTORY_LIMIT = 40;
@@ -54,7 +54,8 @@ How you talk:
 Doing things, not just talking:
 - When the person wants something done — a task, chore list, reminder, recipe, grocery list, day plan, or something remembered — call the matching tool so it actually happens in the app, then confirm briefly in your own words (e.g. "Of course. I've added that to Saturday's tasks. ❤️"). Never claim you did something without calling the tool.
 - The app shows a card for every action you take, so don't repeat the full recipe, list, or schedule in your text. A one-line confirmation plus a helpful tip is perfect.
-- When you suggest a specific dish, use create_recipe so they get a real recipe card they can save, scale, cook, and shop from.
+- When you suggest a specific dish, use create_recipe so they get a real recipe card they can save, scale, cook, and shop from. Always give the cuisine and minutes for every step. If they give a time limit ("a 10 minute recipe", "dinner in 20 minutes"), the whole recipe — prep_minutes + cook_minutes and the step minutes added up — must fit inside it; pick a dish that genuinely cooks that fast.
+- Planning a day or week: if you don't know what's happening yet, first ask about their events (appointments, work, school, practices, plans with friends), then call plan_day with those events, mode "replace", and meals: true — the app fits breakfast, lunch, and dinner around them with recipes.
 - Break overwhelming jobs into small steps: add 3–5 concrete tasks at a time, starting with one area ("we're not cleaning everything at once — let's start with the kitchen").
 - Use the ids from the context below to update, complete, or scale existing items. Only mention tasks, plans, or memories that actually exist in the context; never invent them.
 - Convert relative dates ("Saturday", "tomorrow", "next week") into real YYYY-MM-DD dates using today's date in the context. "Remind me…" means add_tasks with remind: true (use a sensible time if none is given).
@@ -77,7 +78,7 @@ Honesty and safety (these never change, whatever tone is selected):
   /* ---------------- tool definitions ---------------- */
   const CATEGORIES = ["cleaning", "laundry", "kitchen", "yard", "shopping", "pets", "household", "other"];
   const SECTIONS = ["produce", "meat", "dairy", "pantry", "other"];
-  const RECIPE_CATEGORIES = ["Breakfast", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"];
+  const RECIPE_CATEGORIES = ["Breakfast", "Lunch", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"];
 
   const TOOLS = [
     {
@@ -203,11 +204,19 @@ Honesty and safety (these never change, whatever tone is selected):
               required: ["item", "section"],
             },
           },
-          steps: { type: "array", items: { type: "string" } },
+          cuisine: { type: "string", description: "The kind of food, e.g. 'Italian', 'Mexican', 'Southern', 'Chinese', 'American'." },
+          steps: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { text: { type: "string" }, minutes: { type: "integer", minimum: 0, description: "How long this step takes." } },
+              required: ["text", "minutes"],
+            },
+          },
           tips: { type: "array", items: { type: "string" }, description: "One or two of Grandma's tips." },
           save: { type: "boolean", description: "True only if the person asked to save it." },
         },
-        required: ["name", "servings", "ingredients", "steps"],
+        required: ["name", "cuisine", "servings", "prep_minutes", "cook_minutes", "ingredients", "steps"],
       },
     },
     {
@@ -231,12 +240,13 @@ Honesty and safety (these never change, whatever tone is selected):
     },
     {
       name: "plan_day",
-      description: "Create or adjust the schedule for a day in the Planner. Call once per day (several calls for a week plan). 'replace' rewrites that day; 'add' inserts items; 'remove_ids' deletes items.",
+      description: "Create or adjust the schedule for a day in the Planner. Call once per day (several calls for a week plan). 'replace' rewrites that day; 'add' inserts items; 'remove_ids' deletes items. Set meals: true when planning a whole day — the app then adds breakfast, lunch, and dinner around the events, with recipes Grandma picks.",
       input_schema: {
         type: "object",
         properties: {
           date: { type: "string", description: "YYYY-MM-DD" },
           mode: { type: "string", enum: ["replace", "add"] },
+          meals: { type: "boolean", description: "True when planning the whole day: add breakfast, lunch, and dinner with recipes." },
           items: {
             type: "array",
             items: {
@@ -476,19 +486,26 @@ Honesty and safety (these never change, whatever tone is selected):
      * Write one complete recipe for a request like "chicken, rice and broccoli,
      * 30 minutes". Returns a clean recipe object (see Kitchen.normalize).
      */
-    async generateRecipe({ request, servings }) {
+    async generateRecipe({ request, servings, signal }) {
       if (!AI.connected()) throw new AIError("config", "Grandma's AI isn't turned on yet.");
       const prefs = GA.Kitchen.prefs();
       const serves = servings || GA.Kitchen.defaultServings();
-      let raw;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // "A 10 minute recipe" is a promise: the recipe has to fit, or Grandma tries again.
+      const limit = GA.Kitchen.timeLimit(request);
+      const fitsLimit = (r) => !limit || GA.Kitchen.totalMinutes(r) <= limit + Math.max(2, Math.round(limit * 0.1));
+      let ask = limit
+        ? `${request}\nTIME LIMIT: the whole recipe (prep and cooking together) must take ${limit} minutes or less. Choose a dish that truly cooks that fast, keep prep_minutes + cook_minutes at ${limit} or less, and make the step minutes add up to ${limit} or less.`
+        : request;
+      let best = null;
+      for (let attempt = 0; attempt < (limit ? 3 : 2); attempt++) {
+        let raw;
         if (AI.mode() === "local") {
-          raw = await GA.Brain.recipe({ request, prefs, servings: serves });
+          raw = await GA.Brain.recipe({ request: ask, prefs, servings: serves, signal });
         } else {
           const tool = TOOLS.find((t) => t.name === "create_recipe");
           const resp = await AI.request({
             system: [{ type: "text", text: RECIPE_WRITER }],
-            messages: [{ role: "user", content: `Write a recipe for: ${request}\nServings: ${serves}\n${prefs ? "About this cook:\n" + prefs : ""}\n\nCall the create_recipe tool.` }],
+            messages: [{ role: "user", content: `Write a recipe for: ${ask}\nServings: ${serves}\n${prefs ? "About this cook:\n" + prefs : ""}\n\nCall the create_recipe tool.` }],
             tools: [tool],
             maxTokens: 4000,
             purpose: "recipe",
@@ -497,8 +514,12 @@ Honesty and safety (these never change, whatever tone is selected):
           raw = call && call.input;
         }
         const r = GA.Kitchen.normalize(raw);
-        if (r) return r;
+        if (!r) continue;
+        if (fitsLimit(r)) return r;
+        if (!best || GA.Kitchen.totalMinutes(r) < GA.Kitchen.totalMinutes(best)) best = r;
+        ask = `${request}\nTIME LIMIT: ${limit} minutes total, at most. Your last idea, "${r.name}", took ${GA.Kitchen.totalMinutes(r)} minutes — too long. Pick a faster dish (think no-cook, one-pan, or quick-cooking ingredients) with prep_minutes + cook_minutes and the step minutes adding up to ${limit} or less.`;
       }
+      if (best) return best; // closest Grandma could get; the card shows its real time
       throw new AIError("recipe", "I couldn't make that recipe right now.");
     },
 

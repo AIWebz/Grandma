@@ -3,7 +3,7 @@
   "use strict";
   const GA = window.GA;
   const { U, Store } = GA;
-  const CATS = ["Breakfast", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"];
+  const CATS = ["Breakfast", "Lunch", "Dinner", "Desserts", "Baking", "Comfort Food", "Southern", "Italian", "Mexican", "American Classics"];
 
   let query = "";
   let filter = "All";
