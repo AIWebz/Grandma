@@ -34,6 +34,7 @@
           <h3>${U.esc(d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }))}${date !== today ? `<small><button class="link-btn" data-day="today">Back to today</button></small>` : ""}</h3>
           <button class="icon-btn" data-day="1" aria-label="Next day">${U.icon("chevronRight")}</button>
         </div>
+        ${GA.Birthdays && GA.Birthdays.on(date).length ? `<div class="card note bday-today">🎂<span class="grow">${GA.Birthdays.on(date).map((b) => `<strong>${U.esc(b.name)}</strong>'s birthday${GA.Birthdays.turning(b) && GA.Birthdays.next(b) === date ? ` (turning ${GA.Birthdays.turning(b)})` : ""}`).join(", ")}</span><button class="btn small" data-bday-card="${U.esc(GA.Birthdays.on(date)[0].name)}">Make a card</button></div>` : ""}
         ${items.length ? `<div class="card planner-card"><ul class="timeline">${items
           .map((p) => `<li class="${p.done ? "done" : ""} ${p.id === nowId ? "now" : ""}" data-plan-edit="${p.id}">
                 <span class="time">${U.friendlyTime(p.time)}</span><span class="dot"></span>
@@ -48,6 +49,7 @@
         </form>
         ${tasks.length ? `<div class="section-title">Tasks due ${date === today ? "today" : "this day"}</div>
           <div class="list-card">${tasks.map((t) => `<div class="item-row ${t.completed ? "done" : ""}"><input type="checkbox" class="check" data-task-toggle="${t.id}" ${t.completed ? "checked" : ""} aria-label="${U.esc(t.title)}"><div class="t" data-route="tasks/${t.id}"><span>${U.esc(t.title)}</span>${t.dueTime ? `<small>${U.friendlyTime(t.dueTime)}</small>` : ""}</div></div>`).join("")}</div>` : ""}
+        ${GA.Birthdays ? GA.Birthdays.sectionHTML() : ""}
         <div class="ad-slot" data-ad="planner"></div>
       </div>`;
 
@@ -363,7 +365,7 @@
   GA.Views = GA.Views || {};
   GA.Views.planner = {
     title: "Planner",
-    keys: ["plan", "tasks", "htasks"],
+    keys: ["birthdays", "plan", "tasks", "htasks"],
     render(root, params) {
       if (params[0] && U.isValidKey(params[0])) date = params[0];
       render(root);

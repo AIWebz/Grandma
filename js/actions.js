@@ -448,6 +448,29 @@
       return { result: { remembered: true, id: m.id }, card: { type: "memory", id: m.id } };
     },
 
+    add_birthday(input) {
+      const b = GA.Birthdays.add(input);
+      if (!b) return { error: "Need a name, month (1-12), and day." };
+      return {
+        result: { saved: b.name, date: GA.Birthdays.dateText(b), turning: GA.Birthdays.turning(b), days_until: GA.Birthdays.daysUntil(b) },
+        card: { type: "birthday", id: b.id },
+      };
+    },
+
+    make_birthday_card(input) {
+      const name = String(input.name || "").trim();
+      if (!name) return { error: "Who is the card for?" };
+      const b = GA.Birthdays.find(name);
+      const card = {
+        name: b ? b.name : name,
+        message: String(input.message || "").trim() || `Happy birthday, ${name}! Wishing you a year full of love, laughter, and cake.`,
+        style: GA.Birthdays.STYLES[input.style] ? input.style : "classic",
+        age: Number(input.age) || (b && GA.Birthdays.turning(b)) || null,
+        from: Store.doc("profile").name || "",
+      };
+      return { result: { made: true, for: card.name }, card: { type: "bcard", card } };
+    },
+
     forget(input) {
       const m = Store.find("memory", input.memory_id);
       if (!m) return { error: "Memory not found" };

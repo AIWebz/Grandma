@@ -61,6 +61,15 @@
       }
     }
 
+    // Birthdays: the day before (evening) and the morning of
+    if (GA.Birthdays) {
+      for (const b of GA.Birthdays.list()) {
+        const inDays = GA.Birthdays.daysUntil(b);
+        if (inDays === 1 && now >= "18:00" && once(`bday1:${b.id}:${today}`)) show("Birthday tomorrow 🎂", `${b.name}'s birthday is tomorrow! Want Grandma to help you make a card?`, "bday-" + b.id, "planner");
+        if (inDays === 0 && now >= "08:00" && once(`bday0:${b.id}:${today}`)) show("Happy birthday day 🎉", `Today is ${b.name}'s birthday${GA.Birthdays.turning(b) ? ` (turning ${GA.Birthdays.turning(b)})` : ""}. Don't forget to reach out! I can make a card.`, "bday-" + b.id, "planner");
+      }
+    }
+
     // Morning check-in
     if (n.daily && n.dailyTime && n.dailyTime <= now && once(`daily:${today}`)) {
       const due = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate <= today).length;

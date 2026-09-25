@@ -55,6 +55,7 @@ Doing things, not just talking:
 - When the person wants something done — a task, chore list, reminder, recipe, grocery list, day plan, or something remembered — call the matching tool so it actually happens in the app, then confirm briefly in your own words (e.g. "Of course. I've added that to Saturday's tasks. ❤️"). Never claim you did something without calling the tool.
 - The app shows a card for every action you take, so don't repeat the full recipe, list, or schedule in your text. A one-line confirmation plus a helpful tip is perfect.
 - When you suggest a specific dish, use create_recipe so they get a real recipe card they can save, scale, cook, and shop from. Always give the cuisine and minutes for every step. If they give a time limit ("a 10 minute recipe", "dinner in 20 minutes"), the whole recipe — prep_minutes + cook_minutes and the step minutes added up — must fit inside it; pick a dish that genuinely cooks that fast.
+- Birthdays: when they mention someone's birthday, save it with add_birthday. When a birthday is coming up, you can offer a card. For "make a birthday card for Mom", call make_birthday_card with a warm, personal message (use what you know about them).
 - Planning a day or week: if you don't know what's happening yet, first ask about their events (appointments, work, school, practices, plans with friends), then call plan_day with those events, mode "replace", and meals: true — the app fits breakfast, lunch, and dinner around them with recipes.
 - Break overwhelming jobs into small steps: add 3–5 concrete tasks at a time, starting with one area ("we're not cleaning everything at once — let's start with the kitchen").
 - Use the ids from the context below to update, complete, or scale existing items. Only mention tasks, plans, or memories that actually exist in the context; never invent them.
@@ -278,6 +279,35 @@ Honesty and safety (these never change, whatever tone is selected):
       },
     },
     {
+      name: "add_birthday",
+      description: "Remember someone's birthday so Grandma can remind them the day before and on the day, and help make a card. Use whenever they mention a birthday date.",
+      input_schema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Who it's for, as they call them, e.g. 'Mom', 'Aunt June'." },
+          month: { type: "integer", minimum: 1, maximum: 12 },
+          day: { type: "integer", minimum: 1, maximum: 31 },
+          year: { type: "integer", description: "Birth year, only if they said it." },
+          relation: { type: "string", description: "e.g. 'mother', 'best friend'. Optional." },
+        },
+        required: ["name", "month", "day"],
+      },
+    },
+    {
+      name: "make_birthday_card",
+      description: "Make a birthday card they can save or share as an image. Write a warm, personal 2-4 sentence message (don't sign it).",
+      input_schema: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          message: { type: "string" },
+          style: { type: "string", enum: ["classic", "floral", "party", "balloons"] },
+          age: { type: "integer", description: "Age they're turning, if known." },
+        },
+        required: ["name", "message"],
+      },
+    },
+    {
       name: "forget",
       description: "Forget a remembered fact by id when the person asks or it is no longer true.",
       input_schema: { type: "object", properties: { memory_id: { type: "string" } }, required: ["memory_id"] },
@@ -324,6 +354,8 @@ Honesty and safety (these never change, whatever tone is selected):
     }
     const fam = Store.list("family");
     if (fam.length) lines.push("Family Cookbook entries: " + fam.slice(0, 30).map((f) => f.title).join("; "));
+    const bdays = GA.Birthdays && GA.Birthdays.contextLine();
+    if (bdays) lines.push(bdays);
     if (extra && extra.cooking) lines.push(`They are cooking right now: "${extra.cooking.name}" (${extra.cooking.servings} servings), on step ${extra.cooking.step} of ${extra.cooking.total}: "${extra.cooking.stepText}". Answer cooking questions quickly and practically.`);
     return lines.join("\n\n");
   }
@@ -521,6 +553,26 @@ Honesty and safety (these never change, whatever tone is selected):
       }
       if (best) return best; // closest Grandma could get; the card shows its real time
       throw new AIError("recipe", "I couldn't make that recipe right now.");
+    },
+
+    /* A short piece of writing in Grandma's voice (e.g. a birthday card message). */
+    async compose({ instruction }) {
+      if (!AI.connected()) throw new AIError("config", "Grandma's AI isn't turned on yet.");
+      const schema = { type: "object", properties: { text: { type: "string" } }, required: ["text"] };
+      const system = "You are Grandma AI, a warm, funny, loving grandmother figure. Write exactly what's asked, heartfelt and natural. No hashtags, and no quotation marks around it.";
+      if (AI.mode() === "local") {
+        const out = await GA.Brain.json({ instruction, images: [], schema, system });
+        return String((out && out.text) || "").trim();
+      }
+      const resp = await AI.request({
+        system: [{ type: "text", text: system }],
+        messages: [{ role: "user", content: instruction + "\n\nRespond by calling the write tool." }],
+        tools: [{ name: "write", description: "Return the finished text.", input_schema: schema }],
+        maxTokens: 800,
+        purpose: "compose",
+      });
+      const call = (resp.content || []).find((b) => b.type === "tool_use");
+      return String((call && call.input && call.input.text) || "").trim();
     },
 
     /* Single-purpose structured request (e.g. reading a handwritten recipe). */

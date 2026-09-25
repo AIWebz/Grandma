@@ -442,6 +442,14 @@ Not a doctor, lawyer, or therapist; in a crisis, point to 988 or local emergency
       doc: 'plan_day {"date","items":[{"time","title"}]}',
       schema: obj({ date: T_DATE, items: { type: "array", maxItems: 10, items: obj({ time: T_TIME, title: T_STR }, ["time", "title"]) } }, ["date", "items"]),
     },
+    add_birthday: {
+      doc: 'add_birthday {"name","month","day","year"?} — save a birthday',
+      schema: obj({ name: T_STR, month: { type: "integer" }, day: { type: "integer" }, year: { type: "integer" } }, ["name", "month", "day"]),
+    },
+    make_birthday_card: {
+      doc: 'make_birthday_card {"name","message"} — a birthday card with a warm 2-3 sentence message',
+      schema: obj({ name: T_STR, message: T_STR }, ["name", "message"]),
+    },
     remember: {
       doc: 'remember {"category","fact"} — lasting preferences only',
       schema: obj({ category: { type: "string", enum: ["name", "likes", "dislikes", "diet", "skill", "routine", "household", "style", "other"] }, fact: T_STR }, ["category", "fact"]),
@@ -527,6 +535,10 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     if (/grocer|shopping|buy|store|list|need/.test(t)) {
       const g = Store.list("grocery").filter((x) => !x.checked).slice(0, 8).map((x) => x.name);
       lines.push(g.length ? `Grocery list: ${g.join(", ")}.` : "The grocery list is empty.");
+    }
+    if (/birthday|card|bday/.test(t) && GA.Birthdays) {
+      const up = GA.Birthdays.upcoming(60).slice(0, 4);
+      if (up.length) lines.push(`Birthdays: ${up.map((b) => `${b.name} ${GA.Birthdays.dateText(b)}`).join("; ")}.`);
     }
     const shown = ((system[1] && system[1].text) || "").match(/Recipes shown in this conversation[^:]*: ([^\n]*)/);
     if (shown && /recipe|ingredient|grocer|list|that|this|\bit\b/.test(t)) {
@@ -825,7 +837,7 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
     const res = await generate({
       messages: [
         { role: "system", content: system },
-        { role: "user", content: `${instruction}\n\nText read from the photo (it may contain reading mistakes; fix obvious ones only):\n${text.slice(0, 5000)}` },
+        { role: "user", content: images.length ? `${instruction}\n\nText read from the photo (it may contain reading mistakes; fix obvious ones only):\n${text.slice(0, 5000)}` : instruction },
       ],
       temperature: 0.1,
       max_tokens: 1500,

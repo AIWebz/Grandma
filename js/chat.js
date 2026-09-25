@@ -101,6 +101,19 @@
             <div class="card-foot"><button class="btn small" data-route="planner" data-date="${card.date}">Open Planner</button></div>
           </div>`;
       }
+      case "birthday": {
+        const b = Store.find("birthdays", card.id);
+        if (!b) return "";
+        const turning = GA.Birthdays.turning(b);
+        return `<div class="card note">🎂<span class="grow">Grandma will remember <strong>${U.esc(b.name)}'s birthday</strong>: ${U.esc(GA.Birthdays.dateText(b))}${turning ? `, turning ${turning}` : ""} (${U.esc(GA.Birthdays.whenText(b))}).</span><button class="btn small ghost" data-bday-card="${U.esc(b.name)}">Make a card</button></div>`;
+      }
+      case "bcard": {
+        const data = U.esc(JSON.stringify(card.card));
+        return `<div class="card bcard">
+            <img src="${GA.Birthdays.preview(card.card)}" alt="Birthday card for ${U.esc(card.card.name)}">
+            <div class="card-foot"><button class="btn small primary" data-card-share="${data}">${U.icon("upload")}Save or share</button><button class="btn small ghost" data-card-open="${data}">${U.icon("edit")}Edit card</button></div>
+          </div>`;
+      }
       case "plan-ask":
         return `<div class="card">
             <div class="card-body plan-ask">
@@ -157,6 +170,7 @@
         <h2>What can Grandma help you with?</h2>
         <p class="sub">Recipes, chores, planning, groceries, or just a little help getting through the day.</p>
         <p class="grandma-line">${U.esc(grandmaLine())}</p>
+        ${GA.Birthdays ? GA.Birthdays.upcoming(3).slice(0, 1).map((b) => `<button class="get-app-chip" data-bday-card="${U.esc(b.name)}">🎂 ${U.esc(b.name)}'s birthday is ${U.esc(GA.Birthdays.whenText(b))} · Make a card</button>`).join("") : ""}
         ${GA.Install.available() && GA.Install.deviceWord() !== "computer" ? `<button class="get-app-chip" data-action="install">${U.icon("download")}Get the app on your ${GA.Install.deviceWord()}</button>` : ""}
         ${total ? `<a class="progress-pill" href="#/tasks" data-route="tasks"><span class="ring" style="--p:${pct}"></span><span>Today's Progress · <b>${done} / ${total}</b> tasks completed</span></a>` : ""}
         <div class="prompt-grid">

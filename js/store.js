@@ -96,7 +96,7 @@
   };
 
   const DOC_KEYS = ["profile", "settings", "local", "subscription", "household"];
-  const COLLECTION_KEYS = ["memory", "tasks", "htasks", "grocery", "plan", "recipes", "family", "conversations"];
+  const COLLECTION_KEYS = ["memory", "tasks", "htasks", "grocery", "plan", "recipes", "family", "conversations", "birthdays"];
   const LOCAL_ONLY = new Set(["local", "subscription", "household"]);
   // Collections that live with the household (when the user belongs to one).
   const SHARED_KEYS = new Set(["htasks", "grocery", "family"]);
