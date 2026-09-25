@@ -72,7 +72,8 @@
     if (gpu) return gpu;
     if (!("gpu" in navigator)) return (gpu = { ok: false });
     try {
-      const adapter = await navigator.gpu.requestAdapter();
+      // Some browsers never answer this; treat a slow answer as "no graphics chip".
+      const adapter = await Promise.race([navigator.gpu.requestAdapter(), new Promise((r) => setTimeout(() => r(null), 4000))]);
       gpu = adapter ? { ok: true, f16: adapter.features.has("shader-f16") } : { ok: false };
     } catch (e) {
       gpu = { ok: false };
@@ -872,16 +873,18 @@ time ::= "\"" [0-9] [0-9] ":" [0-9] [0-9] "\""`;
             html += `<div class="setup-card center">${U.avatar(72)}<h3>Grandma is ready ❤️</h3><p class="muted">She's running right inside this browser. Ask her what's for dinner.</p>
               <button class="btn primary" data-finish>Start chatting</button></div>`;
           } else {
+            const gpuOkNow = state.support.ok;
             const opt = (m) => {
               const locked = m.key === "7b" && !GA.Plans.can("bigBrain");
               return `<label class="choice ${state.model === m.key ? "on" : ""} ${locked ? "locked" : ""}"><input type="radio" name="model" value="${m.key}" ${state.model === m.key ? "checked" : ""} ${state.progress || locked ? "disabled" : ""}>
-                <span class="grow"><b>${m.label}</b> <span class="muted">· ${m.size}</span><small>${m.note}</small></span>${locked ? `<span class="tag-pro">Pro</span>` : state.downloaded[m.key] ? `<span class="tag ok">Downloaded</span>` : ""}</label>`;
+                <span class="grow"><b>${m.label}</b> <span class="muted">· ${m.size}</span>${gpuOkNow && isMobile() && m.key === "1.5b" ? ` <span class="tag ok">Fastest here</span>` : ""}<small>${m.note}</small></span>${locked ? `<span class="tag-pro">Pro</span>` : state.downloaded[m.key] ? `<span class="tag ok">Downloaded</span>` : ""}</label>`;
             };
             const ready = state.downloaded[state.model];
             const gpuOk = state.support.ok;
             const gpuModels = MODELS.filter((m) => m.engine === "gpu");
             const cpuModels = MODELS.filter((m) => m.engine === "cpu");
-            const list = gpuOk ? (state.showAll || modelFor(state.model).engine === "cpu" ? [...gpuModels, ...cpuModels] : gpuModels) : cpuModels;
+            // Phones and tablets always see every choice they can run.
+            const list = gpuOk ? (state.showAll || isMobile() || modelFor(state.model).engine === "cpu" ? [...gpuModels, ...cpuModels] : gpuModels) : cpuModels;
             html += `<div class="setup-card"><p><b>Choose Grandma's brain.</b> ${ready ? "It's already on this device." : "It's a one-time download — Wi-Fi is best."}</p>
               ${gpuOk ? "" : `<p class="muted small">This device will run Grandma on its processor, so it works on any iPhone, iPad, or Android phone. Replies take a little longer to start than on a computer.</p>`}
               <div class="choices">${list.map(opt).join("")}</div>
